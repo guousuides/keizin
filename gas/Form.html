@@ -1,0 +1,335 @@
+<!--
+  夏合宿 競馬企画 — 馬券購入フォーム
+  ・画面に出るオッズは「今この瞬間まで」の賭け金から計算した暫定値です。
+    後から誰かが賭ければ動きます（本物のパリミュチュエル方式と同じ）。
+  ・計算式は精算シートH列と同じものを oddsFor() で写しています。
+    式を変えるときは必ず両方（シートとここ）を直してください。
+-->
+<style>
+  :root{
+    --bg:#0f1720; --card:#18232f; --line:#27384a; --ink:#e8eef5; --dim:#8fa3b8;
+    --accent:#2ecc71; --accent-d:#1e9e56; --warn:#ffb020; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+       font-size:15px;line-height:1.6;padding-bottom:40px}
+  .wrap{max-width:520px;margin:0 auto;padding:14px}
+  h1{font-size:19px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:14px;margin-bottom:12px}
+  .label{font-size:12px;color:var(--dim);margin-bottom:7px;letter-spacing:.04em}
+  .badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}
+  .open{background:var(--accent);color:#06240f}
+  .closed{background:var(--bad);color:#2b0808}
+
+  .grid{display:grid;gap:7px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  button.opt{background:#1f2d3b;border:1.5px solid var(--line);color:var(--ink);
+        border-radius:10px;padding:11px 6px;font-size:14px;font-family:inherit;cursor:pointer}
+  button.opt:active{transform:scale(.97)}
+  button.opt.on{background:var(--accent);border-color:var(--accent);color:#06240f;font-weight:700}
+  button.opt small{display:block;font-size:10px;opacity:.75;font-weight:400}
+
+  select,input{width:100%;background:#1f2d3b;border:1.5px solid var(--line);color:var(--ink);
+        border-radius:10px;padding:11px;font-size:16px;font-family:inherit}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .row .label{width:44px;margin:0;flex:none}
+
+  .bal{display:flex;justify-content:space-between;align-items:baseline}
+  .bal b{font-size:26px;color:var(--accent)}
+  .quote{background:#132131;border:1px dashed var(--line);border-radius:10px;
+         padding:10px 12px;margin:10px 0;font-size:13px}
+  .quote b{color:var(--warn);font-size:18px}
+
+  button.go{width:100%;background:var(--accent);color:#06240f;border:0;border-radius:12px;
+        padding:15px;font-size:17px;font-weight:800;font-family:inherit;cursor:pointer}
+  button.go:disabled{background:#33414f;color:#6d7c8b;cursor:not-allowed}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 4px;border-bottom:1px solid var(--line);text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--dim);font-weight:500;font-size:11px}
+  .hist{display:flex;justify-content:space-between;align-items:center;gap:8px;
+        padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .hist:last-child{border-bottom:0}
+  .hist .x{background:none;border:1px solid var(--line);color:var(--dim);border-radius:8px;
+        padding:4px 9px;font-size:11px;font-family:inherit;cursor:pointer;flex:none}
+  .msg{border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;display:none}
+  .msg.ok{background:#123024;border:1px solid var(--accent-d);color:#a8e6c1;display:block}
+  .msg.ng{background:#331616;border:1px solid #7a2e2e;color:#ffb3b3;display:block}
+  .hide{display:none!important}
+  .note{color:var(--dim);font-size:11px;margin-top:8px}
+</style>
+
+<div class="wrap">
+  <h1 id="title">🏇 読み込み中…</h1>
+  <div class="sub" id="status"></div>
+
+  <!-- チーム選択 -->
+  <div class="card" id="teamCard">
+    <div class="label">チーム</div>
+    <select id="team"></select>
+  </div>
+
+  <div id="main" class="hide">
+    <div class="card">
+      <div class="bal"><span class="label" style="margin:0">残り持ち点</span>
+        <span><b id="bal">0</b> <span style="color:var(--dim)">pt</span></span></div>
+    </div>
+
+    <div id="msg" class="msg"></div>
+
+    <div class="card">
+      <div class="label">券種</div>
+      <div class="grid g2" id="tickets"></div>
+
+      <div style="height:14px"></div>
+      <div class="label">指名</div>
+      <div class="row"><div class="label" id="lb1">1着</div><select id="p0"></select></div>
+      <div class="row pick3"><div class="label">2着</div><select id="p1"></select></div>
+      <div class="row pick3"><div class="label">3着</div><select id="p2"></select></div>
+
+      <div style="height:8px"></div>
+      <div class="label">賭けpt</div>
+      <input id="pt" type="number" inputmode="numeric" min="1" step="1" placeholder="例：300">
+      <div class="grid g3" style="margin-top:7px">
+        <button class="opt" onclick="addPt(100)">+100</button>
+        <button class="opt" onclick="addPt(300)">+300</button>
+        <button class="opt" onclick="allIn()">全額</button>
+      </div>
+
+      <div class="quote" id="quote">馬と賭けptを選ぶと、想定オッズと払戻が出ます。</div>
+      <button class="go" id="go" onclick="buy()">この内容で購入する</button>
+      <div class="note">
+        表示中のオッズは「今この瞬間まで」の賭け金から計算した暫定値です。
+        締切までに他のチームが賭けると変動します。確定するのは受付締切の時点です。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">現在のオッズ</div>
+      <table>
+        <thead><tr><th>出走</th><th>単勝</th><th>複勝</th><th>人気</th></tr></thead>
+        <tbody id="oddsBody"></tbody>
+      </table>
+      <div class="note">「人気」は賭け金から逆算した想定1着率 p。6人ぶん足すと100%になります。</div>
+    </div>
+
+    <div class="card">
+      <div class="label">このチームの購入履歴</div>
+      <div id="hist"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var S = null;          // サーバから受け取った状態
+var ticket = null;     // 選択中の券種
+var busy = false;
+
+/* ---------- 起動 ---------- */
+google.script.run.withSuccessHandler(init).withFailureHandler(fail).getState('');
+
+function init(s){
+  S = s;
+  document.getElementById('title').textContent = '🏇 ' + s.raceName;
+  document.getElementById('status').innerHTML =
+    s.open ? '<span class="badge open">受付中</span>'
+           : '<span class="badge closed">締切</span> 購入できません。';
+
+  var sel = document.getElementById('team');
+  sel.innerHTML = '<option value="">— 選んでください —</option>' +
+    s.teams.map(function(t){ return '<option>' + esc(t.name) + '</option>'; }).join('');
+  sel.onchange = function(){ if (this.value) load(this.value); };
+
+  ['p0','p1','p2'].forEach(function(id){
+    document.getElementById(id).innerHTML = '<option value="">—</option>' +
+      s.horses.map(function(h){ return '<option>' + esc(h.name) + '</option>'; }).join('');
+    document.getElementById(id).onchange = quote;
+  });
+  document.getElementById('pt').oninput = quote;
+
+  document.getElementById('tickets').innerHTML = s.tickets.map(function(t){
+    return '<button class="opt" data-t="' + t + '" onclick="pickTicket(\'' + t + '\')">' + t +
+           '<small>' + (s.picks[t] === 1 ? '1人を指名' : '3人を指名') + '</small></button>';
+  }).join('');
+
+  renderOdds();
+}
+
+function load(team){
+  google.script.run.withSuccessHandler(function(s){
+    S = s;
+    document.getElementById('main').classList.remove('hide');
+    apply(team);
+  }).withFailureHandler(fail).getState(team);
+}
+
+/** サーバから来た最新状態を画面へ反映 */
+function apply(team){
+  var t = S.teams.filter(function(x){ return x.name === team; })[0];
+  document.getElementById('bal').textContent = t ? fmt(t.balance) : '0';
+  document.getElementById('go').disabled = !S.open;
+  renderOdds();
+  renderHist(team);
+  quote();
+}
+
+/* ---------- 入力 ---------- */
+function pickTicket(t){
+  ticket = t;
+  Array.prototype.forEach.call(document.querySelectorAll('#tickets .opt'), function(b){
+    b.classList.toggle('on', b.dataset.t === t);
+  });
+  var three = S.picks[t] === 3;
+  Array.prototype.forEach.call(document.querySelectorAll('.pick3'), function(e){
+    e.classList.toggle('hide', !three);
+  });
+  document.getElementById('lb1').textContent = three ? '1着' : '本命';
+  if (!three){ document.getElementById('p1').value = ''; document.getElementById('p2').value = ''; }
+  quote();
+}
+function addPt(n){
+  var el = document.getElementById('pt');
+  el.value = (Number(el.value) || 0) + n;
+  quote();
+}
+function allIn(){
+  var t = curTeam();
+  document.getElementById('pt').value = t ? t.balance : 0;
+  quote();
+}
+function curTeam(){
+  var name = document.getElementById('team').value;
+  return S.teams.filter(function(x){ return x.name === name; })[0];
+}
+function picks(){
+  var n = ticket ? S.picks[ticket] : 0;
+  return ['p0','p1','p2'].slice(0, n).map(function(id){ return document.getElementById(id).value; });
+}
+
+/* ---------- オッズ計算（精算シートH列と同じ式） ---------- */
+function horse(name){ return S.horses.filter(function(h){ return h.name === name; })[0]; }
+function clamp(v){ return Math.min(S.calc.cap, Math.max(S.calc.floor, v)); }
+
+function oddsFor(t, ps){
+  if (!t || ps.some(function(x){ return !x; })) return null;
+  if (new Set(ps).size !== ps.length) return null;      // 同じ人の重複指名は不可
+  var h = ps.map(horse);
+  if (h.some(function(x){ return !x; })) return null;
+
+  if (t === '単勝') return h[0].win;
+  if (t === '複勝') return h[0].place;
+
+  // 三連系：素オッズ O_i の積が土台
+  if (h.some(function(x){ return !x.raw; })) return null;
+  var prod = h[0].raw * h[1].raw * h[2].raw;
+  var p = h.map(function(x){ return 1 / x.raw; });
+  var harville = (S.calc.mode === S.calc.harvilleId);
+
+  if (t === '三連単'){
+    var v = harville ? prod * (1 - p[0]) * (1 - p[0] - p[1]) : prod;
+    return clamp(S.calc.tanCoef * v);
+  }
+  // 三連複
+  var w;
+  if (harville){
+    var x = p[0], y = p[1], z = p[2];
+    var s = x*(y/(1-x))*(z/(1-x-y)) + x*(z/(1-x))*(y/(1-x-z))
+          + y*(x/(1-y))*(z/(1-x-y)) + y*(z/(1-y))*(x/(1-y-z))
+          + z*(x/(1-z))*(y/(1-z-x)) + z*(y/(1-z))*(x/(1-z-y));
+    w = 1 / s;
+  } else {
+    w = prod / 6;
+  }
+  return clamp(S.calc.fukuCoef * w);
+}
+
+function quote(){
+  var box = document.getElementById('quote');
+  var ps = picks(), pt = Number(document.getElementById('pt').value);
+  if (!ticket){ box.textContent = 'まず券種を選んでください。'; return; }
+  var o = oddsFor(ticket, ps);
+  if (o === null){
+    var n = S.picks[ticket];
+    box.textContent = (new Set(ps.filter(String)).size !== ps.filter(String).length)
+      ? '同じ人を2回以上 選ぶことはできません。'
+      : n + '人を選んでください。';
+    return;
+  }
+  if (!pt || pt <= 0){ box.innerHTML = '想定オッズ <b>' + o.toFixed(2) + '</b> 倍'; return; }
+  box.innerHTML = '想定オッズ <b>' + o.toFixed(2) + '</b> 倍 　→ 的中なら <b>' +
+                  fmt(Math.ceil(pt * o)) + '</b> pt';
+}
+
+/* ---------- 表示 ---------- */
+function renderOdds(){
+  document.getElementById('oddsBody').innerHTML = S.horses.map(function(h){
+    return '<tr><td>' + esc(h.name) + (h.comment ? ' <span style="color:var(--dim);font-size:11px">' + esc(h.comment) + '</span>' : '') +
+      '</td><td>' + (h.win === null ? '—' : h.win.toFixed(2)) +
+      '</td><td>' + (h.place === null ? '—' : h.place.toFixed(2)) +
+      '</td><td style="color:var(--dim)">' + (h.p ? (h.p * 100).toFixed(0) + '%' : '—') + '</td></tr>';
+  }).join('');
+}
+
+function renderHist(team){
+  var el = document.getElementById('hist');
+  if (!S.history.length){ el.innerHTML = '<div class="note">まだ購入がありません。</div>'; return; }
+  el.innerHTML = S.history.map(function(b){
+    return '<div class="hist"><span>' + b.time + ' 　<b>' + esc(b.ticket) + '</b> ' +
+      esc(b.picks.join(' → ')) + ' 　' + fmt(b.pt) + 'pt</span>' +
+      (S.open ? '<button class="x" onclick="cancel(\'' + b.id + '\')">取消</button>' : '') +
+      '</div>';
+  }).join('');
+}
+
+/* ---------- 送信 ---------- */
+function buy(){
+  if (busy) return;
+  var team = document.getElementById('team').value;
+  var pt = Number(document.getElementById('pt').value);
+  setBusy(true);
+  google.script.run
+    .withSuccessHandler(done).withFailureHandler(fail)
+    .submitBet({ team: team, ticket: ticket, picks: picks(), pt: pt });
+}
+
+function cancel(id){
+  if (busy) return;
+  if (!confirm('この購入を取り消しますか？')) return;
+  setBusy(true);
+  google.script.run
+    .withSuccessHandler(done).withFailureHandler(fail)
+    .cancelBet(document.getElementById('team').value, id);
+}
+
+function done(res){
+  setBusy(false);
+  show(res.message, res.ok);
+  if (res.ok && res.state){
+    S = res.state;
+    document.getElementById('pt').value = '';
+    apply(document.getElementById('team').value);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+function fail(e){ setBusy(false); show('通信エラー：' + e.message, false); }
+
+function setBusy(b){
+  busy = b;
+  var g = document.getElementById('go');
+  g.disabled = b || !S.open;
+  g.textContent = b ? '送信中…' : 'この内容で購入する';
+}
+function show(text, ok){
+  var m = document.getElementById('msg');
+  m.textContent = text;
+  m.className = 'msg ' + (ok ? 'ok' : 'ng');
+}
+function fmt(n){ return Number(n).toLocaleString('ja-JP'); }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+  return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+</script>

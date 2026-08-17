@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🏇 馬券購入</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">🏇 読み込み中…</h1>
+  <div class="sub" id="status"></div>
+
+  <!-- チーム選択：ログインの代わり。選んだチームはブラウザに覚えさせる -->
+  <div class="card">
+    <div class="label">チーム</div>
+    <select id="team"></select>
+    <div class="note">この端末は次からこのチームで開きます。違うときは選び直してください。</div>
+  </div>
+
+  <div id="main" class="hide">
+    <div class="card">
+      <div class="bal">
+        <span class="label" style="margin:0">まだ賭けられる持ち点</span>
+        <span><b id="bal">0</b> <span style="color:var(--dim)">pt</span></span>
+      </div>
+    </div>
+
+    <div id="msg" class="msg"></div>
+
+    <!-- 購入フォーム（受付中だけ出す） -->
+    <div class="card" id="buyCard">
+      <div class="label">券種</div>
+      <div class="grid g2" id="tickets"></div>
+
+      <div style="height:14px"></div>
+      <div class="label">指名</div>
+      <!-- 2着・3着は三連単/三連複を選んだときだけ出す（初期状態は隠す） -->
+      <div class="row"><div class="label" id="lb1">本命</div><select id="p0"></select></div>
+      <div class="row pick3 hide"><div class="label">2着</div><select id="p1"></select></div>
+      <div class="row pick3 hide"><div class="label">3着</div><select id="p2"></select></div>
+
+      <div style="height:8px"></div>
+      <div class="label">賭けpt</div>
+      <input id="pt" type="number" inputmode="numeric" min="1" step="1" placeholder="例：300">
+      <div class="grid g3" style="margin-top:7px">
+        <button class="opt" id="add100">+100</button>
+        <button class="opt" id="add300">+300</button>
+        <button class="opt" id="allin">全額</button>
+      </div>
+
+      <div class="quote" id="quote">券種と指名と賭けptを入れると、想定オッズと払戻が出ます。</div>
+      <button class="go" id="go">この内容で購入する</button>
+      <div class="note">
+        出ているオッズは「今この瞬間まで」の賭け金から計算した暫定値です。
+        締切までに他のチームが賭けると動きます。確定するのは受付締切の時点です。
+      </div>
+    </div>
+
+    <!-- 結果（着順が入ってから出る） -->
+    <div class="card hide" id="resultCard">
+      <h2>🏁 結果</h2>
+      <div id="resultBox"></div>
+    </div>
+
+    <div class="card">
+      <div class="label" id="oddsLabel">現在のオッズ</div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>出走</th><th>単勝</th><th>複勝</th><th>人気</th><th>賭け金</th></tr></thead>
+          <tbody id="oddsBody"></tbody>
+        </table>
+      </div>
+      <div class="why">
+        <b>オッズの出し方</b>　各馬に集まった金額を <code>A_i</code> として
+        <code>オッズ O_i = 賭け金の総額 ÷ A_i</code>。人気が集まるほど倍率は下がります。
+        「人気」は <code>A_i ÷ 全体</code> ＝ その馬が1着になる想定確率で、6人ぶん足すと100%になります。
+        複勝は <code>a × O_i</code>（a は運営設定、既定 1/3）です。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">このチームの購入</div>
+      <div id="hist"></div>
+      <div class="note" id="histNote"></div>
+    </div>
+
+    <div class="card hide" id="standCard">
+      <h2>👑 チーム順位</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>順位</th><th>チーム</th><th>使用</th><th>払戻</th><th>収支</th><th>残高</th></tr></thead>
+          <tbody id="standBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ★オッズの計算はサーバと同じ engine.js を使う（表示と精算が食い違わないように） -->
+<script src="/engine.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

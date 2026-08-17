@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🛠 運営ページ — 競馬企画</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap wide">
+  <h1>🛠 運営ページ</h1>
+  <div class="sub" id="head">読み込み中…</div>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="kpi">
+    <div><span>受付</span><b id="kOpen">—</b></div>
+    <div><span>購入数</span><b id="kBets">—</b></div>
+    <div><span>賭け金の総額 ΣA</span><b id="kSum">—</b></div>
+    <div><span>払戻に回る額 T</span><b id="kT">—</b></div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button data-tab="run" class="on">① 進行</button>
+    <button data-tab="entry">② 出走馬・チーム</button>
+    <button data-tab="conf">③ 設定</button>
+    <button data-tab="odds">④ オッズ内訳</button>
+    <button data-tab="bets">⑤ 購入・精算</button>
+    <button data-tab="rank">⑥ 順位</button>
+  </div>
+
+  <!-- ① 進行 ------------------------------------------------ -->
+  <section data-panel="run">
+    <div class="card">
+      <h2>受付</h2>
+      <div class="grid g2">
+        <button class="go" id="btnOpen">▶ 受付を開始する</button>
+        <button class="sec" id="btnClose">⏹ 受付を締め切る</button>
+      </div>
+      <div class="why">
+        <b>締切を押した瞬間のオッズが確定オッズです。</b>
+        受付中は誰かが賭けるたびに全員のオッズが動きます（本物のパリミュチュエル方式と同じ）。
+        レースが始まる直前に締め切ってください。締切後は参加者側の取消もできなくなります。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🏁 着順を入れる</h2>
+      <div class="grid g3" id="resultInputs"></div>
+      <div style="height:10px"></div>
+      <button class="sec" id="btnResult">着順を保存する</button>
+      <span class="unsaved hide" id="markResult">● 未保存</span>
+      <div class="why">
+        1〜3着の3つが埋まった瞬間に、精算とチーム順位が動きます。
+        途中まで入れた状態では判定は保留のまま（フライング防止）。4着以下は払戻に関係しないので欄がありません。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🔄 次のレースへ</h2>
+      <div class="row">
+        <input id="nextName" placeholder="次のレース名（例：第2レース）">
+        <button class="sec danger" id="btnReset" style="flex:none">リセット</button>
+      </div>
+      <div class="why">
+        購入と着順だけ消して、出走馬・チーム・設定はそのまま残します。
+        消す前に <code>data/archive/</code> に丸ごと保存するので、後から見返せます。
+      </div>
+    </div>
+  </section>
+
+  <!-- ② 出走馬・チーム ------------------------------------- -->
+  <section data-panel="entry" class="hide">
+    <div class="card">
+      <h2>🐴 出走馬（代表者）</h2>
+      <div id="horseRows"></div>
+      <div class="grid g2" style="margin-top:10px">
+        <button class="sec" id="btnHorses">出走馬を保存する</button>
+        <button class="sec" id="btnAddHorse">＋ 1人 増やす</button>
+      </div>
+      <div><span class="unsaved hide" id="markHorses">● 未保存 — 「出走馬を保存する」を押してください</span></div>
+      <div class="why">
+        <b>ここに6人の名前を入れて「出走馬を保存する」を押す</b>と、参加者の選択肢に出るようになります。
+        名前を空にするとその馬は出走しなかった扱いになります（選択肢から消えます）。
+        ひとことコメントは参加者のオッズ表に小さく出ます（「腕相撲最強」とか）。
+        <b>受付開始後に名前を変えると、既に買われた馬券が集計から外れます</b>ので、事前に確定させてください。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>👥 チーム</h2>
+      <div id="teamRows"></div>
+      <div class="grid g2" style="margin-top:10px">
+        <button class="sec" id="btnTeams">チームを保存する</button>
+        <button class="sec" id="btnAddTeam">＋ 1チーム 増やす</button>
+      </div>
+      <div><span class="unsaved hide" id="markTeams">● 未保存 — 「チームを保存する」を押してください</span></div>
+      <div class="why">
+        参加者はこの一覧からチーム名を選んで買います（パスワードなし）。
+        持ち点は全チーム共通で、③設定の「初期持ち点」です。
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ 設定 ----------------------------------------------- -->
+  <section data-panel="conf" class="hide">
+    <div class="card">
+      <h2>⚙ 設定</h2>
+      <div id="setRows"></div>
+      <div style="height:12px"></div>
+      <button class="sec" id="btnSettings">設定を保存する</button>
+      <span class="unsaved hide" id="markSettings">● 未保存</span>
+    </div>
+
+    <div class="card">
+      <h2>⚠ 三連系の注意（読んでから係数を決めてください）</h2>
+      <div class="why">
+        <b>「単純積」方式は期待払戻が約180%になります。</b>
+        6人が完全に横一線（p = 1/6）のとき——<br>
+        ・三連単 … 当たる確率 <code>3!/6! = 1/120</code>、倍率 <code>6×6×6 = 216</code>倍 → 期待払戻 <b>1.80</b><br>
+        ・三連複 … 当たる確率 <code>3!3!/6! = 1/20</code>、倍率 <code>216÷6 = 36</code>倍 → 期待払戻 <b>1.80</b><br><br>
+        <code>O_i×O_j×O_k = 1/(p_i p_j p_k)</code> は「3回とも6人から引き直す」計算で、
+        1着に決まった人は2着になれない（母数が減る）ぶんを織り込めていないためです。
+        しかも倍率は固定ではなく、<b>買う馬によって 1.46〜2.44倍と揺れます</b>（人気馬で固めるほど大きい）。<br><br>
+        <b>対処（好きなものを）</b><br>
+        (a) 何もしない … 派手な配当が出て盛り上がる。企画としてはこれもアリ<br>
+        (b) 三連単係数・三連複係数を <code>0.5〜0.6</code> に下げる … 手っ取り早い<br>
+        (c) 三連系方式を <b>Harville補正</b> にする …
+        <code>1着 p_i → 2着 p_j/(1−p_i) → 3着 p_k/(1−p_i−p_j)</code> と正しく条件付けした確率の逆数を使う。
+        期待払戻がちょうど100%になります
+      </div>
+      <div class="why">
+        <b>複勝は「穴馬買い」が数学的に得です。</b>
+        <code>a = 1/3</code> で100%還元になるのは6人が横一線のときだけ。人気が偏ると——<br>
+        p=0.50（大本命）→ 期待払戻 61% ／ p=0.167（横一線）→ 100% ／ p=0.04（大穴）→ 334%。<br>
+        3着以内に入る率は100%で頭打ちなのに <code>a × O_i</code> は p が小さいほど伸び続けるためです。
+        大穴に賭ける動機ができるので、企画としてはむしろ健全だと思います。気になるなら控除率を上げてください。
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ オッズ内訳 ----------------------------------------- -->
+  <section data-panel="odds" class="hide">
+    <div class="card">
+      <h2>📊 オッズ内訳</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>馬</th><th>単勝から</th><th>複勝から(×a)</th><th>三連単から</th><th>三連複から</th>
+            <th>合計 A_i</th><th>素 O_i</th><th>単勝</th><th>複勝</th><th>人気 p_i</th>
+          </tr></thead>
+          <tbody id="oddsBody"></tbody>
+          <tfoot id="oddsFoot"></tfoot>
+        </table>
+      </div>
+      <div class="why">
+        <b>各列が「どの券種からいくら流れ込んだか」です。</b>
+        単勝はそのまま、複勝は <code>a</code> 倍、三連単は1着指名に<code>1/2</code>・2着に<code>1/3</code>・3着に<code>1/6</code>、
+        三連複は3人に<code>1/3</code>ずつ。重みの合計が必ず1になるので
+        <code>ΣA_i</code> がそのまま賭け金の総額と一致し、<code>Σ(1/O_i) = 1</code> が成り立ちます。
+        だから <code>p_i = 1/O_i</code> を「その人が1着になる想定確率」としてそのまま使えます。<br>
+        <b>例外</b>：1票も入っていない人は <code>O_i</code> がオッズ上限で頭打ちになるので、その人だけこの関係が崩れます
+        （人気 <code>p_i = A_i ÷ ΣA_i</code> の方は 0% になるだけで、合計は常に100%です）。
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑤ 購入・精算 ----------------------------------------- -->
+  <section data-panel="bets" class="hide">
+    <div class="card">
+      <h2>🧾 購入と精算</h2>
+      <div class="row">
+        <a class="sec" href="/api/admin/bets.csv" style="text-decoration:none;flex:none">⬇ CSVで書き出す</a>
+        <span class="note" style="margin:0">スプレッドシートに貼り戻したいとき用（BOM付きなので文字化けしません）。</span>
+      </div>
+      <div class="scroll" style="margin-top:10px">
+        <table>
+          <thead><tr>
+            <th>ID</th><th>時刻</th><th>チーム</th><th>券種</th><th>指名</th>
+            <th>賭けPt</th><th>適用オッズ</th><th>判定</th><th>払戻pt</th><th></th>
+          </tr></thead>
+          <tbody id="betsBody"></tbody>
+        </table>
+      </div>
+      <div class="why">
+        「適用オッズ」は今の賭け金から計算した値です。受付中は動き、締切後は固定されます。
+        判定は着順が3つ埋まってから出ます。取消は押し間違いの救済用で、消すとオッズが再計算されます。
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑥ 順位 ----------------------------------------------- -->
+  <section data-panel="rank" class="hide">
+    <div class="card">
+      <h2>👑 チーム順位</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>順位</th><th>チーム</th><th>購入数</th><th>使用pt</th><th>払戻pt</th>
+            <th>収支</th><th>残高</th><th>残り持ち点</th>
+          </tr></thead>
+          <tbody id="rankBody"></tbody>
+        </table>
+      </div>
+      <div class="why">
+        <code>収支 = 払戻 − 使用</code>、<code>残高 = 初期持ち点 + 収支</code>。順位は残高の多い順（同点は同順位）。
+        着順が3つ埋まるまで順位は出ません。
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="/engine.js"></script>
+<script src="/admin.js"></script>
+</body>
+</html>
