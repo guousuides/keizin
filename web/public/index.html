@@ -24,6 +24,7 @@
         <span class="label" style="margin:0">まだ賭けられる持ち点</span>
         <span><b id="bal">0</b> <span style="color:var(--dim)">pt</span></span>
       </div>
+      <div class="note" id="balNote"></div>
     </div>
 
     <div id="msg" class="msg"></div>
@@ -85,13 +86,31 @@
       <div class="note" id="histNote"></div>
     </div>
 
+    <!-- これまでのレース（2レース目以降に出る） -->
+    <div class="card hide" id="pastCard">
+      <div class="label">このチームのこれまで</div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>レース</th><th>開始</th><th>使用</th><th>払戻</th><th>収支</th><th>終了時</th></tr></thead>
+          <tbody id="pastBody"></tbody>
+        </table>
+      </div>
+      <div class="note">
+        前のレースを終えた時点の持ち点が、そのまま次のレースの持ち点になります。
+        当たった払戻ぶんも次のレースで賭けられます。
+      </div>
+    </div>
+
     <div class="card hide" id="standCard">
       <h2>👑 チーム順位</h2>
       <div class="scroll">
         <table>
-          <thead><tr><th>順位</th><th>チーム</th><th>使用</th><th>払戻</th><th>収支</th><th>残高</th></tr></thead>
+          <thead><tr><th>順位</th><th>チーム</th><th>開始</th><th>使用</th><th>払戻</th><th>収支</th><th>残高</th></tr></thead>
           <tbody id="standBody"></tbody>
         </table>
+      </div>
+      <div class="note">
+        「残高」は次のレースに持ち込む持ち点です（＝ここまでの通算成績）。
       </div>
     </div>
   </div>

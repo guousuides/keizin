@@ -42,7 +42,14 @@ const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
  *  状態の読み書き
  * ============================================================ */
 
-/** 初期状態。出走馬6人・チーム10組の空欄を用意しておく。 */
+/**
+ * 初期状態。出走馬6人・チーム10組の空欄を用意しておく。
+ *
+ * carry / raceNo / history が「レースをまたいで持ち点を引き継ぐ」ための3点セット。
+ *   carry   … 今のレースの開始持ち点 { チーム名: pt }。空なら全員 initialPoints。
+ *   raceNo  … 何レース目か（1始まり）
+ *   history … 終わったレースの記録。通算表に出す。
+ */
 function freshState() {
   return {
     settings: Engine.defaultSettings(),
@@ -51,6 +58,9 @@ function freshState() {
     bets: [],
     result: ['', '', ''],
     seq: 0,            // 受付番号の連番
+    carry: {},
+    raceNo: 1,
+    history: [],
   };
 }
 
@@ -67,6 +77,10 @@ function load() {
     s.bets = s.bets || [];
     s.result = (s.result || ['', '', '']).slice(0, 3);
     s.seq = s.seq || s.bets.length;
+    // 繰越が入る前の保存ファイルを読んでも動くように（1レース目扱いになる）
+    s.carry = (s.carry && typeof s.carry === 'object') ? s.carry : {};
+    s.raceNo = Number(s.raceNo) > 0 ? Number(s.raceNo) : 1;
+    s.history = Array.isArray(s.history) ? s.history : [];
     return s;
   } catch (e) {
     return freshState();
@@ -124,6 +138,46 @@ function activeTeams() {
   return state.teams.map(t => String(t || '').trim()).filter(Boolean);
 }
 
+/** このレースの開始持ち点。＝前レース終了時の残高、無ければ初期持ち点。 */
+function startPointsFor(team) {
+  return Engine.startPoints(team, state.settings, state.carry);
+}
+
+/** 今のレースのチーム収支（開始pt・残高つき）。 */
+function currentStandings() {
+  const settled = Engine.settle(activeHorses(), state.bets, state.result, state.settings);
+  return Engine.standings(activeTeams(), settled, state.result, state.settings, state.carry);
+}
+
+/**
+ * チームごとの通算表。history に積んだ各レースの残高を横に並べる。
+ * 「今どれだけ持っているか」は現レースの残高がそのまま答えになります
+ * （繰越が入っているので、残高＝通算成績）。
+ */
+function totalsByTeam() {
+  const now = currentStandings();
+  const ready = Engine.resultReady(state.result);
+  const settled = Engine.settle(activeHorses(), state.bets, state.result, state.settings);
+  const hitsNow = {};
+  settled.forEach(b => { if (b.hit === true) hitsNow[b.team] = (hitsNow[b.team] || 0) + 1; });
+
+  return now.map(r => {
+    const past = state.history.map(h => (h.teams && h.teams[r.team]) || null);
+    const usedAll = past.reduce((a, p) => a + (p ? p.used : 0), 0) + r.used;
+    const retAll = past.reduce((a, p) => a + (p ? p.ret : 0), 0) + r.ret;
+    const hitAll = past.reduce((a, p) => a + (p ? p.hits || 0 : 0), 0) + (hitsNow[r.team] || 0);
+    return {
+      team: r.team,
+      races: state.history.length + (ready ? 1 : 0),
+      usedAll, retAll, hitAll,
+      perRace: past.map(p => (p ? p.balance : null)),
+      start: r.start,
+      balance: r.balance,     // ＝いま持っている点（繰越込み）
+      rank: r.rank,
+    };
+  });
+}
+
 /* ============================================================
  *  参加者向けの状態
  * ============================================================ */
@@ -134,7 +188,7 @@ function publicState(teamName) {
   const teams = activeTeams();
   const table = Engine.computeOdds(horses, state.bets, s);
   const settled = Engine.settle(horses, state.bets, state.result, s);
-  const stand = Engine.standings(teams, settled, state.result, s);
+  const stand = Engine.standings(teams, settled, state.result, s, state.carry);
 
   const me = teamName ? stand.find(r => r.team === teamName) : null;
   const myBets = teamName
@@ -143,6 +197,8 @@ function publicState(teamName) {
 
   return {
     raceName: s.raceName,
+    raceNo: state.raceNo,
+    carryOn: state.history.length > 0,   // 2レース目以降か（繰越の説明を出すかの判定）
     open: !!s.open,
     resultReady: Engine.resultReady(state.result),
     result: Engine.resultReady(state.result) ? state.result : ['', '', ''],
@@ -162,6 +218,13 @@ function publicState(teamName) {
     },
     me: me || null,
     myBets: myBets,
+    // 終わったレースの自分の成績（繰越の内訳を見せるため）
+    myHistory: teamName
+      ? state.history.map(h => Object.assign(
+          { raceName: h.raceName },
+          (h.teams && h.teams[teamName]) || null))
+        .filter(x => x.balance !== undefined)
+      : [],
     standings: Engine.resultReady(state.result) ? stand : null,   // 結果が出るまで順位は隠す
   };
 }
@@ -183,13 +246,19 @@ function adminState() {
     odds: table.horses,
     totals: { sumA: table.sumA, T: table.T, empty: table.empty },
     bets: settled.slice().reverse(),
-    standings: Engine.standings(teams, settled, state.result, s),
+    standings: Engine.standings(teams, settled, state.result, s, state.carry),
     modes: [Engine.MODE.SIMPLE, Engine.MODE.HARVILLE],
     tickets: Engine.TICKETS,
     picks: Engine.PICKS,
     horseNames: horses.map(h => h.name),
     betCount: state.bets.length,
     totalStake: state.bets.reduce((a, b) => a + (Number(b.pt) || 0), 0),
+    // 繰越まわり
+    raceNo: state.raceNo,
+    carry: teams.map(t => ({ team: t, start: startPointsFor(t), carried: state.carry[t] !== undefined })),
+    history: state.history.map(h => ({ raceName: h.raceName, result: h.result })),
+    teamTotals: totalsByTeam(),
+    carryPool: teams.reduce((a, t) => a + startPointsFor(t), 0),
   };
 }
 
@@ -223,9 +292,11 @@ function submitBet(body) {
     return { ok: false, message: '賭けptは1以上の整数で入れてください。' };
   }
 
+  // ★持ち点は「このレースの開始pt」基準。前レースで増やした払戻ぶんもここに入っている。
+  const start = startPointsFor(team);
   const used = state.bets.filter(b => b.team === team)
     .reduce((a, b) => a + (Number(b.pt) || 0), 0);
-  const free = s.initialPoints - used;
+  const free = start - used;
   if (pt > free) return { ok: false, message: `持ち点が足りません（残り ${free} pt）。` };
 
   state.seq += 1;
@@ -357,6 +428,14 @@ const adminActions = {
   /**
    * 次のレースへ。購入と着順だけ消して、出走馬・チーム・設定は残す。
    * 消す前に data/archive/ へ丸ごと退避するので、後から見返せます。
+   *
+   * ★ここで持ち点を繰り越します。
+   *   着順が3つ埋まっている（＝精算済み）なら、各チームの残高＝開始pt＋収支を
+   *   次のレースの開始ptにします。的中した払戻ぶんもそのまま次で使えます。
+   *
+   *   着順が入っていないままリセットした場合は繰り越しません。
+   *   計算しようとすると全馬券が「不的中」扱いになって、賭けた点数だけ没収される
+   *   （＝レース中止なのに全員が損する）ので、そのレースを丸ごと無かったことにします。
    */
   reset(body) {
     fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
@@ -365,16 +444,99 @@ const adminActions = {
     fs.writeFileSync(path.join(ARCHIVE_DIR, `${stamp}_${name}.json`),
       JSON.stringify(state, null, 2), 'utf8');
 
+    const settled = Engine.settle(activeHorses(), state.bets, state.result, state.settings);
+    const stand = Engine.standings(activeTeams(), settled, state.result,
+                                  state.settings, state.carry);
+    const ready = Engine.resultReady(state.result);
+    let note;
+
+    if (ready) {
+      const hits = {};
+      settled.forEach(b => { if (b.hit === true) hits[b.team] = (hits[b.team] || 0) + 1; });
+
+      // 通算表のために1レースぶんを記録
+      const rec = { raceName: state.settings.raceName, result: state.result.slice(), teams: {} };
+      stand.forEach(r => {
+        rec.teams[r.team] = {
+          start: r.start, used: r.used, ret: r.ret, profit: r.profit,
+          balance: r.balance, rank: r.rank, count: r.count, hits: hits[r.team] || 0,
+        };
+      });
+      state.history.push(rec);
+
+      state.carry = Engine.nextCarry(stand, state.settings);
+      state.raceNo += 1;
+
+      const revived = stand.filter(r => state.carry[r.team] > r.balance).length;
+      note = `残高をそのまま次のレースの持ち点に繰り越しました（${stand.length}チーム）。` +
+        (revived ? `うち ${revived} チームは敗者復活の最低持ち点まで戻しています。` : '');
+    } else {
+      note = '★着順が未入力だったので、このレースは無効として持ち点を繰り越していません' +
+             '（賭けた点数は返ります）。着順を入れてからリセットすると精算した残高が繰り越されます。';
+    }
+
     state.bets = [];
     state.result = ['', '', ''];
     state.seq = 0;
     state.settings.open = false;
-    if (body.raceName) state.settings.raceName = String(body.raceName).trim();
+    if (body.raceName) {
+      state.settings.raceName = String(body.raceName).trim();
+    } else if (ready) {
+      state.settings.raceName = `第${state.raceNo}レース`;
+    }
     if (body.clearHorses) {
       state.horses = state.horses.map(h => ({ no: h.no, name: '', comment: '' }));
     }
     save();
-    return { ok: true, message: `前のレースを data/archive/ に保存して、リセットしました。` };
+    return { ok: true, message: `前のレースを data/archive/ に保存しました。${note}` };
+  },
+
+  /**
+   * 持ち点の手直し。入力ミスの救済用。
+   * 「そのレースの開始pt」を直接書き換えます（受付中に触ると参加者の残高が動きます）。
+   */
+  carry(body) {
+    const rows = body.carry || {};
+    const teams = activeTeams();
+    let n = 0;
+    teams.forEach(t => {
+      if (!(t in rows)) return;
+      const v = Number(rows[t]);
+      if (!isFinite(v) || v < 0) return;
+      state.carry[t] = Math.floor(v);
+      n += 1;
+    });
+    // 既に使った点より少ない持ち点にしてしまうと残高がマイナスになるので警告
+    const over = currentStandings().filter(r => r.free < 0).map(r => r.team);
+    save();
+    return {
+      ok: true,
+      message: `${n} チームの持ち点を書き換えました。` +
+        (over.length ? `★${over.join('・')} は既に購入した点数を下回っています（残高がマイナス）。` : ''),
+    };
+  },
+
+  /** 企画のやり直し。繰越も履歴も消して全チーム初期持ち点に戻す。 */
+  restart() {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(ARCHIVE_DIR, `${stamp}_restart.json`),
+      JSON.stringify(state, null, 2), 'utf8');
+
+    state.bets = [];
+    state.result = ['', '', ''];
+    state.seq = 0;
+    state.carry = {};
+    state.raceNo = 1;
+    state.history = [];
+    state.settings.open = false;
+    state.settings.raceName = '第1レース';
+    save();
+    return {
+      ok: true,
+      message: `全部リセットしました。全チーム ${state.settings.initialPoints}pt からやり直しです` +
+               `（直前の状態は data/archive/ にあります）。`,
+    };
   },
 };
 
@@ -385,11 +547,12 @@ const adminActions = {
 function betsCsv() {
   const s = state.settings;
   const settled = Engine.settle(activeHorses(), state.bets, state.result, s);
-  const head = ['受付ID', '受付時刻', 'チーム', '券種', '1着指名', '2着指名', '3着指名',
+  const head = ['レース', '受付ID', '受付時刻', 'チーム', '券種', '1着指名', '2着指名', '3着指名',
                 '賭けPt', '適用オッズ', '的中', '払戻pt'];
   const lines = [head.join(',')];
   settled.forEach(b => {
     lines.push([
+      s.raceName,
       b.id,
       new Date(b.time).toLocaleString('ja-JP'),
       b.team, b.ticket,
@@ -401,6 +564,25 @@ function betsCsv() {
     ].map(csvCell).join(','));
   });
   return '﻿' + lines.join('\r\n');   // BOM付き。Excel/スプレッドシートで文字化けしない
+}
+
+/**
+ * 通算表のCSV。レースごとの残高が横に並びます。
+ * 最後の列が「いま持っている点」＝繰越込みの通算成績。
+ */
+function totalsCsv() {
+  const rows = totalsByTeam();
+  const head = ['チーム']
+    .concat(state.history.map(h => (h.raceName || 'レース') + '終了時'))
+    .concat([state.settings.raceName + 'の開始pt', '現在の持ち点',
+             '通算使用pt', '通算払戻pt', '通算的中数']);
+  const lines = [head.join(',')];
+  rows.forEach(r => {
+    lines.push([r.team].concat(r.perRace.map(v => (v === null ? '' : v)))
+      .concat([r.start, r.balance, r.usedAll, r.retAll, r.hitAll])
+      .map(csvCell).join(','));
+  });
+  return '﻿' + lines.join('\r\n');
 }
 
 function csvCell(v) {
@@ -457,6 +639,13 @@ const server = http.createServer((req, res) => {
         'Content-Disposition': 'attachment; filename="bets.csv"',
       });
       return res.end(betsCsv());
+    }
+    if (req.method === 'GET' && p === '/api/admin/totals.csv') {
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="totals.csv"',
+      });
+      return res.end(totalsCsv());
     }
     if (req.method === 'POST' && p.startsWith('/api/admin/')) {
       const action = p.slice('/api/admin/'.length);

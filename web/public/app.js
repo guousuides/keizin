@@ -88,15 +88,35 @@ function render() {
   $('main').classList.toggle('hide', !team);
   $('buyCard').classList.toggle('hide', !S.open);
 
-  if (S.me) $('bal').textContent = fmt(S.me.free);
+  renderBalance();
   $('oddsLabel').textContent = S.open ? '現在のオッズ（変動中）' : '確定オッズ';
   $('go').disabled = busy || !S.open;
 
   renderOdds();
   renderHist();
   renderResult();
+  renderPast();
   renderStandings();
   quote();
+}
+
+/**
+ * 持ち点の表示。
+ * free（まだ賭けられる残り）＝ このレースの開始pt − すでに賭けたpt。
+ * 開始ptは前のレースの残高なので、当たった払戻ぶんもここに含まれています。
+ */
+function renderBalance() {
+  if (!S.me) { $('balNote').textContent = ''; return; }
+  var m = S.me;
+  $('bal').textContent = fmt(m.free);
+
+  var note = 'このレースの持ち点 ' + fmt(m.start) + 'pt';
+  if (m.used) note += '（うち ' + fmt(m.used) + 'pt を購入済み）';
+  if (S.carryOn) note += '　※前のレース終了時の残高（払戻ぶんを含む）を繰り越しています。';
+  if (m.start === 0) {
+    note += '　持ち点が0なので今回は購入できません。運営に相談してください。';
+  }
+  $('balNote').textContent = note;
 }
 
 function renderOdds() {
@@ -157,15 +177,32 @@ function renderResult() {
     '<div style="font-size:17px;margin-bottom:10px">🥇 ' + esc(S.result[0]) +
     '　🥈 ' + esc(S.result[1]) + '　🥉 ' + esc(S.result[2]) + '</div>' +
     '<table><tbody>' +
+    tr('開始pt', fmt(m.start)) +
     tr('使用pt', fmt(m.used)) + tr('払戻pt', fmt(m.ret)) +
     '<tr><td>収支</td><td class="' + cls + '"><b>' + (m.profit > 0 ? '＋' : '') + fmt(m.profit) +
     '</b></td></tr>' +
-    tr('最終残高', '<b>' + fmt(m.balance) + '</b>') +
+    tr('残高', '<b>' + fmt(m.balance) + '</b>') +
     tr('順位', '<b class="' + (m.rank === 1 ? 'rank1' : '') + '">' + m.rank + '位</b>') +
-    '</tbody></table>';
+    '</tbody></table>' +
+    '<div class="note">この <b>' + fmt(m.balance) +
+    'pt</b> がそのまま次のレースの持ち点になります（当たった払戻ぶんも次で賭けられます）。</div>';
 }
 
 function tr(k, v) { return '<tr><td>' + k + '</td><td>' + v + '</td></tr>'; }
+
+/** これまでのレースの自分の成績。繰越の内訳が見えるように。 */
+function renderPast() {
+  var rows = S.myHistory || [];
+  $('pastCard').classList.toggle('hide', !rows.length);
+  if (!rows.length) return;
+  $('pastBody').innerHTML = rows.map(function (h) {
+    var cls = h.profit > 0 ? 'pos' : (h.profit < 0 ? 'neg' : '');
+    return '<tr><td>' + esc(h.raceName) + '</td><td>' + fmt(h.start) + '</td><td>' +
+      fmt(h.used) + '</td><td>' + fmt(h.ret) + '</td><td class="' + cls + '">' +
+      (h.profit > 0 ? '＋' : '') + fmt(h.profit) + '</td><td><b>' + fmt(h.balance) +
+      '</b></td></tr>';
+  }).join('');
+}
 
 function renderStandings() {
   $('standCard').classList.toggle('hide', !S.standings);
@@ -174,7 +211,8 @@ function renderStandings() {
   $('standBody').innerHTML = rows.map(function (r) {
     var cls = r.profit > 0 ? 'pos' : (r.profit < 0 ? 'neg' : '');
     return '<tr><td class="' + (r.rank === 1 ? 'rank1' : '') + '">' + r.rank + '</td><td>' +
-      esc(r.team) + '</td><td>' + fmt(r.used) + '</td><td>' + fmt(r.ret) +
+      esc(r.team) + '</td><td style="color:var(--dim)">' + fmt(r.start) + '</td><td>' +
+      fmt(r.used) + '</td><td>' + fmt(r.ret) +
       '</td><td class="' + cls + '">' + (r.profit > 0 ? '＋' : '') + fmt(r.profit) +
       '</td><td><b>' + fmt(r.balance) + '</b></td></tr>';
   }).join('');
@@ -201,7 +239,8 @@ function addPt(n) {
 }
 
 function allIn() {
-  $('pt').value = S.me ? S.me.free : 0;
+  // 運営が持ち点を下げた直後は free がマイナスになりうるので 0 で止める
+  $('pt').value = S.me ? Math.max(0, S.me.free) : 0;
   quote();
 }
 

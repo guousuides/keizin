@@ -13,7 +13,8 @@
 
   <div id="msg" class="msg"></div>
 
-  <div class="kpi">
+  <div class="kpi" style="grid-template-columns:repeat(5,1fr)">
+    <div><span>レース</span><b id="kRace">—</b></div>
     <div><span>受付</span><b id="kOpen">—</b></div>
     <div><span>購入数</span><b id="kBets">—</b></div>
     <div><span>賭け金の総額 ΣA</span><b id="kSum">—</b></div>
@@ -57,14 +58,38 @@
     </div>
 
     <div class="card">
-      <h2>🔄 次のレースへ</h2>
+      <h2>🔄 次のレースへ（持ち点を繰り越す）</h2>
       <div class="row">
-        <input id="nextName" placeholder="次のレース名（例：第2レース）">
-        <button class="sec danger" id="btnReset" style="flex:none">リセット</button>
+        <input id="nextName" placeholder="次のレース名（空欄なら自動で「第Nレース」）">
+        <button class="sec danger" id="btnReset" style="flex:none">次のレースへ</button>
       </div>
       <div class="why">
-        購入と着順だけ消して、出走馬・チーム・設定はそのまま残します。
-        消す前に <code>data/archive/</code> に丸ごと保存するので、後から見返せます。
+        <b>着順を入れてからこれを押してください。</b>
+        各チームの残高（開始pt ＋ 収支 ＝ <b>払戻ぶんを含む</b>）がそのまま次のレースの持ち点になります。
+        購入と着順は消えますが、出走馬・チーム・設定・持ち点は残ります。
+        消す前に <code>data/archive/</code> に丸ごと保存するので、後から見返せます。<br><br>
+        <b>着順が未入力のまま押した場合は繰り越しません。</b>
+        全馬券が「不的中」で精算されて全員が賭けたぶんだけ損する形になってしまうので、
+        そのレースを無かったこと（賭け金は返却）にして持ち点を据え置きます。
+        レースが中止になったときはこれで大丈夫です。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>💰 チームの持ち点（繰越）</h2>
+      <div id="carryRows"></div>
+      <div class="grid g2" style="margin-top:10px">
+        <button class="sec" id="btnCarry">持ち点を書き換える</button>
+        <button class="sec danger" id="btnRestart">全部リセット（1レース目に戻す）</button>
+      </div>
+      <div><span class="unsaved hide" id="markCarry">● 未保存 — 「持ち点を書き換える」を押してください</span></div>
+      <div class="why">
+        いま各チームがこのレースを何ptで始めたかです。ふだんは触る必要がありません
+        （「次のレースへ」を押せば自動で繰り越されます）。
+        着順を入れ間違えて精算してしまった等のときだけ、ここで直接直してください。<br>
+        <b>受付中に下げると参加者の残高が減ります。</b>すでに購入した点数より少ない値にすると残高がマイナスになるので、
+        その場合は購入の取消（⑤タブ）を先にしてください。<br>
+        「全部リセット」は繰越と全レースの履歴を消して、全チームを初期持ち点に戻します（企画のやり直し用）。
       </div>
     </div>
   </section>
@@ -97,7 +122,11 @@
       <div><span class="unsaved hide" id="markTeams">● 未保存 — 「チームを保存する」を押してください</span></div>
       <div class="why">
         参加者はこの一覧からチーム名を選んで買います（パスワードなし）。
-        持ち点は全チーム共通で、③設定の「初期持ち点」です。
+        1レース目の持ち点は全チーム共通で、③設定の「初期持ち点」です。
+        2レース目以降は前のレースの残高（払戻を含む）を引き継ぎます。
+        <b>途中で増やしたチームは初期持ち点から始まります</b>ので、
+        すでに何レースか進んでいる場合は①進行タブの「チームの持ち点」で調整してください。
+        チーム名を後から変えると別チーム扱いになり、繰越が引き継がれない点にも注意してください。
       </div>
     </div>
   </section>
@@ -192,19 +221,40 @@
   <!-- ⑥ 順位 ----------------------------------------------- -->
   <section data-panel="rank" class="hide">
     <div class="card">
-      <h2>👑 チーム順位</h2>
+      <h2>👑 チーム順位（このレース）</h2>
       <div class="scroll">
         <table>
           <thead><tr>
-            <th>順位</th><th>チーム</th><th>購入数</th><th>使用pt</th><th>払戻pt</th>
+            <th>順位</th><th>チーム</th><th>開始pt</th><th>購入数</th><th>使用pt</th><th>払戻pt</th>
             <th>収支</th><th>残高</th><th>残り持ち点</th>
           </tr></thead>
           <tbody id="rankBody"></tbody>
         </table>
       </div>
       <div class="why">
-        <code>収支 = 払戻 − 使用</code>、<code>残高 = 初期持ち点 + 収支</code>。順位は残高の多い順（同点は同順位）。
-        着順が3つ埋まるまで順位は出ません。
+        <code>収支 = 払戻 − 使用</code>、<code>残高 = 開始pt + 収支</code>、
+        <code>残り持ち点 = 開始pt − 使用</code>（まだ賭けられる額）。
+        順位は残高の多い順（同点は同順位）。着順が3つ埋まるまで順位は出ません。<br>
+        <b>開始pt</b>は前のレース終了時の残高です。1レース目と途中参加のチームだけ初期持ち点になります。
+        繰越しているので、<b>残高がそのまま通算成績</b>です。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📈 通算</h2>
+      <div class="row">
+        <a class="sec" href="/api/admin/totals.csv" style="text-decoration:none;flex:none">⬇ 通算表をCSVで書き出す</a>
+        <span class="note" style="margin:0">表彰用。レースごとの残高が横に並びます。</span>
+      </div>
+      <div class="scroll" style="margin-top:10px">
+        <table>
+          <thead id="totalHead"></thead>
+          <tbody id="totalBody"></tbody>
+        </table>
+      </div>
+      <div class="why">
+        各レースを終えた時点の持ち点の推移です。いちばん右が今の持ち点＝通算成績。
+        「次のレースへ」を押したレースだけが記録されます。
       </div>
     </div>
   </section>

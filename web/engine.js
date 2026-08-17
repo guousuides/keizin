@@ -49,7 +49,8 @@
       oddsCap:       999,          // オッズ上限
       trifectaCoef:  1,            // 三連単係数
       trioCoef:      1,            // 三連複係数
-      initialPoints: 1000,         // 初期持ち点
+      initialPoints: 1000,         // 初期持ち点（1レース目、および新規チーム）
+      revivePoints:  0,            // 次レースへ繰り越すときの最低持ち点
       roundUnit:     1,            // 払戻の丸め単位（切り上げ）
       trifectaMode:  MODE.SIMPLE,  // 三連系方式
       open:          false,        // 受付中かどうか
@@ -79,7 +80,11 @@
     { key: 'trioCoef', label: '三連複係数', type: 'number', step: 'any',
       note: '同上（三連複）。' },
     { key: 'initialPoints', label: '初期持ち点', type: 'number', step: '1',
-      note: '各チームに配る持ち点。これを超える購入は弾かれます。' },
+      note: '各チームに最初に配る持ち点。2レース目以降は前のレースの残高（払戻を含む）をそのまま繰り越すので、' +
+            'ここを変えても既にプレイ中のチームの持ち点は変わりません。途中から増えたチームだけこの値で始まります。' },
+    { key: 'revivePoints', label: '敗者復活の最低持ち点', type: 'number', step: '1',
+      note: '次のレースへ繰り越すときの下限。0だと全部溶かしたチームは残高0のまま以降なにも買えません。' +
+            '100などにしておくと、0になったチームも次のレースで100ptから復帰できます（脱落者を出さない保険）。' },
     { key: 'roundUnit', label: '丸め単位', type: 'number', step: 'any',
       note: '払戻ptの丸め単位。5にすると5pt刻みで切り上げます（春合宿版は5でした）。' },
     { key: 'trifectaMode', label: '三連系方式', type: 'select', options: [MODE.SIMPLE, MODE.HARVILLE],
@@ -321,14 +326,29 @@
   }
 
   /**
+   * このレースの開始持ち点。
+   *
+   * carry（＝前のレース終了時の残高の表）に載っているチームはその値、
+   * 載っていないチーム（1レース目、または途中参加）は設定の初期持ち点。
+   * ★「払戻ぶんも次のレースで使える」のは、この1関数だけで成り立っています。
+   */
+  function startPoints(team, s, carry) {
+    var v = carry ? carry[team] : undefined;
+    return (typeof v === 'number' && isFinite(v)) ? v : s.initialPoints;
+  }
+
+  /**
    * チームごとの収支。
+   *   開始pt … このレースを何ptで始めたか（前レースからの繰越 or 初期持ち点）
    *   使用pt … 賭けた合計
    *   払戻pt … 的中ぶんの合計
    *   収支   … 払戻 − 使用
-   *   残高   … 初期持ち点 + 収支
+   *   残高   … 開始pt + 収支 ＝ 次のレースへ持ち越す額
    *   順位   … 残高の多い順（同点は同順位。結果未入力のあいだは null）
+   *
+   * carry を省略すると全チームが初期持ち点スタート（＝1レース目）になります。
    */
-  function standings(teams, settled, result, s) {
+  function standings(teams, settled, result, s, carry) {
     var by = {};
     teams.forEach(function (t) {
       by[t] = { team: t, used: 0, ret: 0, count: 0 };
@@ -344,11 +364,12 @@
     var rows = teams.map(function (t) {
       var r = by[t];
       var profit = r.ret - r.used;
+      var start = startPoints(t, s, carry);
       return {
-        team: t, used: r.used, ret: r.ret, count: r.count,
+        team: t, start: start, used: r.used, ret: r.ret, count: r.count,
         profit: profit,
-        balance: s.initialPoints + profit,
-        free: s.initialPoints - r.used,     // まだ賭けられる残り
+        balance: start + profit,
+        free: start - r.used,     // まだ賭けられる残り
         rank: null,
       };
     });
@@ -363,6 +384,22 @@
     return rows;
   }
 
+  /**
+   * 次のレースへ持ち越す持ち点の表を作る。
+   * ＝ 各チームのこのレース終了時の残高（払戻を含む）。
+   *
+   * 「敗者復活の最低持ち点」を下回ったチームはそこまで戻します。
+   * 0のままだと全部溶かしたチームが以降ずっと何も買えず、企画から脱落してしまうので。
+   */
+  function nextCarry(rows, s) {
+    var floor = Number(s.revivePoints) || 0;
+    var out = {};
+    rows.forEach(function (r) {
+      out[r.team] = Math.max(r.balance, floor);
+    });
+    return out;
+  }
+
   return {
     TICKETS: TICKETS,
     PICKS: PICKS,
@@ -375,6 +412,8 @@
     judge: judge,
     payout: payout,
     settle: settle,
+    startPoints: startPoints,
     standings: standings,
+    nextCarry: nextCarry,
   };
 });

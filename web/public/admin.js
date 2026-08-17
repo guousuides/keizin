@@ -18,7 +18,7 @@ var tab = 'run';
 var timer = null;
 
 /** 手で触ったフォーム。true のあいだ自動更新はそのフォームに触らない。 */
-var dirty = { horses: false, teams: false, settings: false, result: false };
+var dirty = { horses: false, teams: false, settings: false, result: false, carry: false };
 
 var $ = function (id) { return document.getElementById(id); };
 
@@ -62,15 +62,30 @@ function boot() {
     marks();
   };
 
+  $('btnCarry').onclick = saveCarry;
+  $('btnRestart').onclick = function () {
+    if (!confirm('繰越の持ち点と全レースの履歴を消して、1レース目に戻します。\n' +
+                 '全チームが初期持ち点からやり直しになります。よいですか？')) return;
+    if (!confirm('本当によいですか？（直前の状態は data/archive/ に残ります）')) return;
+    post('restart', {});
+  };
+
   // どのフォームを触ったかを覚える（保存するまで自動更新で上書きしない）
   [['horseRows', 'horses'], ['teamRows', 'teams'],
-   ['setRows', 'settings'], ['resultInputs', 'result']].forEach(function (pair) {
+   ['setRows', 'settings'], ['resultInputs', 'result'],
+   ['carryRows', 'carry']].forEach(function (pair) {
     ['input', 'change'].forEach(function (ev) {
       $(pair[0]).addEventListener(ev, function () { dirty[pair[1]] = true; marks(); });
     });
   });
   $('btnReset').onclick = function () {
-    if (!confirm('購入と着順を消して次のレースの準備をします。\n（消す前に data/archive/ に保存されます）')) return;
+    // 着順が入っていないと繰り越せない。押す前にはっきり知らせる。
+    var msg = A && A.resultReady
+      ? '着順で精算した残高を、そのまま次のレースの持ち点に繰り越します。\n' +
+        '購入と着順は消えます（消す前に data/archive/ に保存されます）。'
+      : '⚠ 着順が入っていません。\nこのまま進めると、このレースは無効になり持ち点は繰り越されません' +
+        '（賭けた点数は返ります）。\n精算した残高を繰り越したいなら、先に着順を入れてください。';
+    if (!confirm(msg)) return;
     post('reset', { raceName: $('nextName').value });
   };
 
@@ -95,6 +110,7 @@ function render() {
                      : '<span class="badge closed">締切</span>') +
     (A.resultReady ? ' <span class="badge pend">着順入力済</span>' : '');
 
+  $('kRace').textContent = A.raceNo + ' 走目';
   $('kOpen').textContent = A.settings.open ? '受付中' : '締切';
   $('kBets').textContent = A.betCount + ' 点';
   $('kSum').textContent = fmt(A.totals.sumA) + ' pt';
@@ -103,10 +119,12 @@ function render() {
   renderResultInputs();
   renderHorses();
   renderTeams();
+  renderCarry();
   renderSettings();
   renderOdds();
   renderBets();
   renderRank();
+  renderTotals();
   marks();
 }
 
@@ -116,7 +134,8 @@ function keep(el) { return el && document.activeElement === el; }
 /** 「未保存」印の出し入れ。 */
 function marks() {
   [['horses', 'markHorses'], ['teams', 'markTeams'],
-   ['settings', 'markSettings'], ['result', 'markResult']].forEach(function (p) {
+   ['settings', 'markSettings'], ['result', 'markResult'],
+   ['carry', 'markCarry']].forEach(function (p) {
     var el = $(p[1]);
     if (el) el.classList.toggle('hide', !dirty[p[0]]);
   });
@@ -176,6 +195,32 @@ function renderTeams(force) {
   } else {
     Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
       if (!keep(inp)) inp.value = A.teamsRaw[Number(inp.dataset.t)] || '';
+    });
+  }
+}
+
+/**
+ * チームごとの持ち点（＝このレースの開始pt）。
+ * 「繰越」印が付いているチームは前のレースから引き継いだ値、
+ * 付いていないチームは設定の初期持ち点がそのまま出ています。
+ */
+function renderCarry(force) {
+  var box = $('carryRows');
+  if (!force && dirty.carry) return;
+  var rows = A.carry || [];
+  if (force || box.dataset.n !== String(rows.length)) {
+    box.innerHTML = rows.map(function (c, i) {
+      return '<div class="row"><div class="label" style="width:110px">' + esc(c.team) + '</div>' +
+        '<input data-c="' + i + '" type="number" step="1" min="0" value="' + esc(c.start) + '">' +
+        '<span class="note" style="margin:0;width:74px;flex:none">' +
+        (c.carried ? '繰越' : '初期値') + '</span></div>';
+    }).join('');
+    box.dataset.n = String(rows.length);
+  } else {
+    Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
+      if (keep(inp)) return;
+      var c = rows[Number(inp.dataset.c)];
+      if (c) inp.value = c.start;
     });
   }
 }
@@ -269,11 +314,36 @@ function renderRank() {
     var cls = r.profit > 0 ? 'pos' : (r.profit < 0 ? 'neg' : '');
     return '<tr><td class="' + (r.rank === 1 ? 'rank1' : '') + '">' +
       (r.rank === null ? '—' : r.rank) + '</td>' +
-      '<td>' + esc(r.team) + '</td><td>' + r.count + '</td><td>' + fmt(r.used) + '</td>' +
+      '<td>' + esc(r.team) + '</td>' +
+      '<td style="color:var(--dim)">' + fmt(r.start) + '</td>' +
+      '<td>' + r.count + '</td><td>' + fmt(r.used) + '</td>' +
       '<td>' + fmt(r.ret) + '</td>' +
       '<td class="' + cls + '">' + (r.profit > 0 ? '＋' : '') + fmt(r.profit) + '</td>' +
       '<td><b>' + fmt(r.balance) + '</b></td>' +
-      '<td style="color:var(--dim)">' + fmt(r.free) + '</td></tr>';
+      '<td style="color:' + (r.free < 0 ? 'var(--bad)' : 'var(--dim)') + '">' +
+      fmt(r.free) + '</td></tr>';
+  }).join('');
+}
+
+/** 通算表。列＝終わったレース＋いまのレース。値はそのレースを終えた時点の持ち点。 */
+function renderTotals() {
+  var rows = (A.teamTotals || []).slice().sort(function (a, b) { return b.balance - a.balance; });
+  $('totalHead').innerHTML = '<tr><th>チーム</th>' +
+    (A.history || []).map(function (h) { return '<th>' + esc(h.raceName) + '</th>'; }).join('') +
+    '<th>' + esc(A.settings.raceName) + '<br><span style="color:var(--dim);font-weight:400">開始 → 現在</span></th>' +
+    '<th>通算使用</th><th>通算払戻</th><th>的中</th></tr>';
+
+  $('totalBody').innerHTML = rows.map(function (r) {
+    var diff = r.retAll - r.usedAll;
+    var cls = diff > 0 ? 'pos' : (diff < 0 ? 'neg' : '');
+    return '<tr><td>' + esc(r.team) + '</td>' +
+      r.perRace.map(function (v) {
+        return '<td style="color:var(--dim)">' + (v === null ? '—' : fmt(v)) + '</td>';
+      }).join('') +
+      '<td>' + fmt(r.start) + ' → <b class="' + cls + '">' + fmt(r.balance) + '</b></td>' +
+      '<td style="color:var(--dim)">' + fmt(r.usedAll) + '</td>' +
+      '<td style="color:var(--dim)">' + fmt(r.retAll) + '</td>' +
+      '<td style="color:var(--dim)">' + r.hitAll + '</td></tr>';
   }).join('');
 }
 
@@ -318,13 +388,26 @@ function readTeams() {
 function saveHorses() { post('horses', { horses: readHorses() }); }
 function saveTeams()  { post('teams',  { teams:  readTeams()  }); }
 
+/** 持ち点の書き換え。チーム名をキーにして送る。 */
+function saveCarry() {
+  var out = {};
+  Array.prototype.forEach.call($('carryRows').querySelectorAll('input'), function (inp) {
+    var c = A.carry[Number(inp.dataset.c)];
+    if (c) out[c.team] = inp.value;
+  });
+  if (!confirm('チームの持ち点を書き換えます。受付中だと参加者の残高がその場で変わります。よいですか？')) return;
+  post('carry', { carry: out });
+}
+
 /** どの操作を保存したら、どのフォームの「未保存」を解除するか。 */
 var CLEARS = {
   horses:   ['horses'],
   teams:    ['teams'],
   settings: ['settings'],
   result:   ['result'],
-  reset:    ['horses', 'teams', 'settings', 'result'],
+  carry:    ['carry'],
+  reset:    ['horses', 'teams', 'settings', 'result', 'carry'],
+  restart:  ['horses', 'teams', 'settings', 'result', 'carry'],
 };
 
 function post(action, body) {
@@ -344,6 +427,7 @@ function post(action, body) {
       if (action === 'settings') $('setRows').dataset.built = '';
       renderHorses(true);
       renderTeams(true);
+      renderCarry(true);
       renderResultInputs(true);
       render();
     })
