@@ -206,6 +206,7 @@ function publicState(teamName) {
     picks: Engine.PICKS,
     horses: table.horses,
     totals: { sumA: table.sumA, T: table.T, empty: table.empty },
+    betCount: state.bets.length,
     teams: teams,
     initialPoints: s.initialPoints,
     // ブラウザ側でも同じ engine.js を使って想定オッズを出すために設定を渡す
@@ -611,6 +612,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
       return sendFile(res, path.join(PUBLIC, 'index.html'));
     }
+    if (req.method === 'GET' && (p === '/odds' || p === '/odds.html')) {
+      return sendFile(res, path.join(PUBLIC, 'odds.html'));
+    }
     if (req.method === 'GET' && (p === ADMIN_PATH || p === ADMIN_PATH + '/')) {
       return sendFile(res, path.join(PUBLIC, 'admin.html'));
     }
@@ -729,11 +733,15 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  🏇 夏合宿 競馬企画 サーバ起動');
   console.log('  ─────────────────────────────────────────────');
   console.log(`  参加者ページ  http://localhost:${PORT}/`);
+  console.log(`  オッズ画面    http://localhost:${PORT}/odds  （スクリーン投影用）`);
   console.log(`  運営ページ    http://localhost:${PORT}${ADMIN_PATH}`);
   if (ips.length) {
     console.log('');
     console.log('  同じWi-Fiのスマホからは ↓ を配ってください');
     ips.forEach(ip => console.log(`      http://${ip}:${PORT}/`));
+    console.log('');
+    console.log('  会場のスクリーン・プロジェクター用:');
+    ips.forEach(ip => console.log(`      http://${ip}:${PORT}/odds`));
     console.log(`  （運営ページも同じWi-Fiの誰でも開けます。気になるときは`);
     console.log(`    ADMIN_PATH=/himitsu node server.js のようにパスを変えてください）`);
   }

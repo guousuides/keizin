@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🏇 オッズモニター — 夏合宿 競馬企画</title>
+<link rel="stylesheet" href="/odds.css">
+</head>
+<body>
+<div class="screen-container">
+
+  <!-- ヘッダー -->
+  <header class="screen-header">
+    <div class="header-left">
+      <div class="event-logo">🏇</div>
+      <div class="title-group">
+        <span class="event-sub">競馬企画 — オッズモニター</span>
+        <h1 class="race-title" id="raceTitle">読み込み中…</h1>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="status-badge" id="statusBadge">—</div>
+      <div class="kpi-chips">
+        <div class="kpi-chip">
+          <span class="chip-label">総投票額 ΣA</span>
+          <span class="chip-val gold" id="totalPool">0 <small style="font-size:12px">pt</small></span>
+        </div>
+        <div class="kpi-chip">
+          <span class="chip-label">総投票数</span>
+          <span class="chip-val" id="betCount">0 <small style="font-size:12px">点</small></span>
+        </div>
+      </div>
+      <button class="btn-fullscreen" id="btnFullscreen" title="全画面表示（F11）">
+        <span>⛶</span> 全画面
+      </button>
+    </div>
+  </header>
+
+  <!-- 確定結果バナー（着順確定時のみ表示） -->
+  <section class="result-banner hide" id="resultBanner">
+    <div class="result-banner-header">
+      <h2>🏁 レース結果 確定</h2>
+      <div class="result-banner-details" id="resultDetails"></div>
+    </div>
+    <div class="result-places" id="resultPlaces"></div>
+  </section>
+
+  <!-- メイングリッド -->
+  <main class="main-grid">
+
+    <!-- 左：単勝・複勝オッズボード -->
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>🐴</span> 出走馬 ＆ 単勝・複勝オッズ
+        </div>
+        <div class="panel-sub" id="oddsStateText">リアルタイム更新中</div>
+      </div>
+      <div class="panel-body">
+        <table class="odds-table">
+          <thead>
+            <tr>
+              <th style="width:50px;text-align:center">馬番</th>
+              <th>出走馬 / プロフィール</th>
+              <th style="width:110px">単勝</th>
+              <th style="width:90px">複勝</th>
+              <th style="width:120px">人気 / 支持率</th>
+              <th style="width:90px">賭け金</th>
+            </tr>
+          </thead>
+          <tbody id="oddsBody">
+            <!-- JavaScriptで描画 -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 右：三連系ランキング（三連単・三連複） -->
+    <div class="sub-panels">
+
+      <!-- 三連単 人気TOP -->
+      <section class="ranking-card">
+        <div class="ranking-header">
+          <div class="ranking-title">
+            <span>🎯</span> 三連単 注目オッズ (TOP 6)
+          </div>
+          <div class="panel-sub">1着 → 2着 → 3着</div>
+        </div>
+        <div class="ranking-list" id="trifectaList">
+          <!-- JavaScriptで描画 -->
+        </div>
+      </section>
+
+      <!-- 三連複 人気TOP -->
+      <section class="ranking-card">
+        <div class="ranking-header">
+          <div class="ranking-title">
+            <span>🎲</span> 三連複 注目オッズ (TOP 5)
+          </div>
+          <div class="panel-sub">3頭の組み合わせ</div>
+        </div>
+        <div class="ranking-list" id="trioList">
+          <!-- JavaScriptで描画 -->
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- フッター -->
+  <footer class="screen-footer">
+    <div class="footer-left">
+      <div class="live-indicator">
+        <div class="live-dot"></div>
+        <span>LIVE</span>
+      </div>
+      <span id="updateTime">最終更新: —</span>
+      <span style="color:var(--dim)">|</span>
+      <span id="connStatus">正常接続</span>
+    </div>
+    <div class="footer-right">
+      <span>※ オッズは受付締切まで変動します。確定するのは受付締切の瞬間です。</span>
+    </div>
+  </footer>
+
+</div>
+
+<!-- 計算エンジンと画面スクリプト -->
+<script src="/engine.js"></script>
+<script src="/odds.js"></script>
+</body>
+</html>
