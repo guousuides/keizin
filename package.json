@@ -1,0 +1,13 @@
+{
+  "name": "keizin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "夏合宿 競馬企画",
+  "main": "web/server.js",
+  "scripts": {
+    "start": "node web/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

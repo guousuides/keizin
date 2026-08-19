@@ -32,11 +32,17 @@ const PORT = Number(process.env.PORT) || 3000;
 /** 運営ページのパス。心配なら ADMIN_PATH=/kanri node server.js のように変えられます。 */
 const ADMIN_PATH = process.env.ADMIN_PATH || '/admin';
 
+const IS_VERCEL = !!process.env.VERCEL;
 const DIR = __dirname;
 const PUBLIC = path.join(DIR, 'public');
-const DATA_DIR = path.join(DIR, 'data');
+const DATA_DIR = IS_VERCEL ? path.join(os.tmpdir(), 'keizin-data') : path.join(DIR, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'race.json');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
+
+// Upstash Redis / Vercel KV の REST API（設定されていればクラウド同期、無ければローカル/tmp保存）
+const KV_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_REST_URL || '').replace(/\/+$/, '');
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_REST_TOKEN || '';
+const KV_KEY = 'keiba_race_state';
 
 /* ============================================================
  *  状態の読み書き
@@ -64,39 +70,68 @@ function freshState() {
   };
 }
 
-let state = load();
+function sanitizeState(s) {
+  if (!s || typeof s !== 'object') return freshState();
+  s.settings = Object.assign(Engine.defaultSettings(), s.settings || {});
+  s.horses = s.horses || [];
+  s.teams = s.teams || [];
+  s.bets = s.bets || [];
+  s.result = (s.result || ['', '', '']).slice(0, 3);
+  s.seq = s.seq || s.bets.length;
+  s.carry = (s.carry && typeof s.carry === 'object') ? s.carry : {};
+  s.raceNo = Number(s.raceNo) > 0 ? Number(s.raceNo) : 1;
+  s.history = Array.isArray(s.history) ? s.history : [];
+  return s;
+}
 
-function load() {
+let state = loadLocal();
+
+function loadLocal() {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    const s = JSON.parse(raw);
-    // 古い保存ファイルに新しい設定項目が無くても落ちないように既定値で埋める
-    s.settings = Object.assign(Engine.defaultSettings(), s.settings || {});
-    s.horses = s.horses || [];
-    s.teams = s.teams || [];
-    s.bets = s.bets || [];
-    s.result = (s.result || ['', '', '']).slice(0, 3);
-    s.seq = s.seq || s.bets.length;
-    // 繰越が入る前の保存ファイルを読んでも動くように（1レース目扱いになる）
-    s.carry = (s.carry && typeof s.carry === 'object') ? s.carry : {};
-    s.raceNo = Number(s.raceNo) > 0 ? Number(s.raceNo) : 1;
-    s.history = Array.isArray(s.history) ? s.history : [];
-    return s;
+    return sanitizeState(JSON.parse(raw));
   } catch (e) {
     return freshState();
   }
 }
 
+/** クラウドKVが設定されている場合は最新状態を同期 */
+async function syncFromKV() {
+  if (!KV_URL || !KV_TOKEN || typeof fetch !== 'function') return;
+  try {
+    const res = await fetch(`${KV_URL}/get/${KV_KEY}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.result) {
+      const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+      state = sanitizeState(parsed);
+    }
+  } catch (e) {
+    // KV接続失敗時はメモリ/ローカルのstateを維持
+  }
+}
+
+/** クラウドKVへの非同期保存 */
+async function syncToKV() {
+  if (!KV_URL || !KV_TOKEN || typeof fetch !== 'function') return;
+  try {
+    await fetch(`${KV_URL}/set/${KV_KEY}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(state),
+    });
+  } catch (e) {
+    console.warn('⚠ KVへの保存に失敗しました:', e.message);
+  }
+}
+
 /**
  * 保存。一時ファイルに書いてから置き換えるので、途中で落ちてもJSONが壊れません。
- *
- * ただしWindowsでは、ウイルス対策ソフトやOneDriveが一瞬ファイルを掴んでいると
- * 置き換え（rename）が EPERM で失敗します。デスクトップ上だと普通に起こります。
- * 失敗しても購入を無かったことにはできない（参加者が二重に買ってしまう）ので、
- *   ① 少し待って5回まで retry
- *   ② それでもダメなら直接上書き
- *   ③ それも失敗したら警告だけ出して続行（メモリ上の状態が正）
- * という順で粘ります。保存できなくても当日の進行は止まりません。
  */
 function save() {
   const text = JSON.stringify(state, null, 2);
@@ -117,9 +152,9 @@ function save() {
     fs.writeFileSync(DATA_FILE, text, 'utf8');   // 置き換えを諦めて直接上書き
     try { fs.unlinkSync(tmp); } catch (e) { /* 消せなくても実害なし */ }
   } catch (e) {
-    console.warn('⚠ data/race.json に保存できませんでした:', e.message);
-    console.warn('  進行は続きます（購入内容はサーバのメモリ上にあります）。');
-    console.warn('  サーバを止める前に、運営ページの「CSVで書き出す」で控えを取ってください。');
+    if (!IS_VERCEL) {
+      console.warn('⚠ data/race.json に保存できませんでした:', e.message);
+    }
   }
 }
 
@@ -603,11 +638,14 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const server = http.createServer((req, res) => {
+async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
 
   try {
+    // クラウドKVが設定されている場合は最新データを同期
+    await syncFromKV();
+
     /* --- 画面 --- */
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
       return sendFile(res, path.join(PUBLIC, 'index.html'));
@@ -676,7 +714,9 @@ const server = http.createServer((req, res) => {
     console.error(e);
     json(res, { ok: false, message: 'サーバ側でエラー: ' + e.message }, 500);
   }
-});
+}
+
+const server = http.createServer(handleRequest);
 
 function sendFile(res, file) {
   fs.readFile(file, (err, buf) => {
@@ -718,35 +758,39 @@ function withBody(req, res, fn) {
 }
 
 /* ============================================================
- *  起動
+ *  エクスポートと起動
  * ============================================================ */
 
-server.listen(PORT, '0.0.0.0', () => {
-  const ips = [];
-  Object.values(os.networkInterfaces()).forEach(list => {
-    (list || []).forEach(ni => {
-      if (ni.family === 'IPv4' && !ni.internal) ips.push(ni.address);
-    });
-  });
+module.exports = handleRequest;
 
-  console.log('');
-  console.log('  🏇 夏合宿 競馬企画 サーバ起動');
-  console.log('  ─────────────────────────────────────────────');
-  console.log(`  参加者ページ  http://localhost:${PORT}/`);
-  console.log(`  オッズ画面    http://localhost:${PORT}/odds  （スクリーン投影用）`);
-  console.log(`  運営ページ    http://localhost:${PORT}${ADMIN_PATH}`);
-  if (ips.length) {
+if (require.main === module) {
+  server.listen(PORT, '0.0.0.0', () => {
+    const ips = [];
+    Object.values(os.networkInterfaces()).forEach(list => {
+      (list || []).forEach(ni => {
+        if (ni.family === 'IPv4' && !ni.internal) ips.push(ni.address);
+      });
+    });
+
     console.log('');
-    console.log('  同じWi-Fiのスマホからは ↓ を配ってください');
-    ips.forEach(ip => console.log(`      http://${ip}:${PORT}/`));
+    console.log('  🏇 夏合宿 競馬企画 サーバ起動');
+    console.log('  ─────────────────────────────────────────────');
+    console.log(`  参加者ページ  http://localhost:${PORT}/`);
+    console.log(`  オッズ画面    http://localhost:${PORT}/odds  （スクリーン投影用）`);
+    console.log(`  運営ページ    http://localhost:${PORT}${ADMIN_PATH}`);
+    if (ips.length) {
+      console.log('');
+      console.log('  同じWi-Fiのスマホからは ↓ を配ってください');
+      ips.forEach(ip => console.log(`      http://${ip}:${PORT}/`));
+      console.log('');
+      console.log('  会場のスクリーン・プロジェクター用:');
+      ips.forEach(ip => console.log(`      http://${ip}:${PORT}/odds`));
+      console.log(`  （運営ページも同じWi-Fiの誰でも開けます。気になるときは`);
+      console.log(`    ADMIN_PATH=/himitsu node server.js のようにパスを変えてください）`);
+    }
     console.log('');
-    console.log('  会場のスクリーン・プロジェクター用:');
-    ips.forEach(ip => console.log(`      http://${ip}:${PORT}/odds`));
-    console.log(`  （運営ページも同じWi-Fiの誰でも開けます。気になるときは`);
-    console.log(`    ADMIN_PATH=/himitsu node server.js のようにパスを変えてください）`);
-  }
-  console.log('');
-  console.log(`  データ: ${DATA_FILE}`);
-  console.log('  止めるときは Ctrl+C');
-  console.log('');
-});
+    console.log(`  データ: ${DATA_FILE}`);
+    console.log('  止めるときは Ctrl+C');
+    console.log('');
+  });
+}
