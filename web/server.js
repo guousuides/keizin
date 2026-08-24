@@ -43,6 +43,28 @@ const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 const KV_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_REST_URL || '').replace(/\/+$/, '');
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_REST_TOKEN || '';
 const KV_KEY = 'keiba_race_state';
+const KV_LOCK_KEY = 'keiba_race_lock';
+const LOCK_TTL_MS = 5000;      // 鍵の有効期限。インスタンスが落ちてもここで自動的に開く
+const LOCK_WAIT_MS = 3000;     // 鍵が空くのを待つ上限
+const KV_ENABLED = !!(KV_URL && KV_TOKEN && typeof fetch === 'function');
+
+/**
+ * ★サーバレス（Vercel）で「受付中」と「締切」が数秒ごとに往復する事故について
+ *
+ * Vercelではリクエストごとに別のインスタンスが応答することがあります。
+ * インスタンスはメモリも /tmp も共有しないので、状態をクラウドKVに書き戻していないと
+ *   運営が「受付開始」を押したインスタンス   … open = true
+ *   それ以外のインスタンス                   … open = false
+ * が並立し、参加者ページの3秒ごとの自動更新がどちらに当たるかで
+ * 受付中と締切が入れ替わって見えます（買えたり買えなかったりする）。
+ *
+ * 対策はひとつだけで「書き換えたら必ずKVへ書き戻し、書き戻し終わるまで返事をしない」。
+ *   save()  … ローカルへ即書き＋「まだKVに書けていない」印を立てる
+ *   flush() … KVへ書き戻す。mutate() がレスポンス前に必ず待つ
+ *   mutate()… 読み込み→書き換え→書き戻し を1本の待ち行列に通す
+ */
+let dirty = false;      // KVへ書き戻していない変更を抱えているか
+let kvError = null;     // 直近のKV通信エラー（運営ページに出す）
 
 /* ============================================================
  *  状態の読み書き
@@ -95,45 +117,122 @@ function loadLocal() {
   }
 }
 
-/** クラウドKVが設定されている場合は最新状態を同期 */
+/** Upstash / Vercel KV のRESTコマンドを1つ投げる。 */
+async function kvCommand(args) {
+  const res = await fetch(KV_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${KV_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(args),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 120)}`);
+  return JSON.parse(text);
+}
+
+/**
+ * クラウドKVから最新状態を読み込む。
+ * まだ書き戻せていない変更を抱えているとき（dirty）は読まない。
+ * 読んでしまうとその変更が古い内容で消され、まさに「勝手に元に戻る」が起きるため。
+ */
 async function syncFromKV() {
-  if (!KV_URL || !KV_TOKEN || typeof fetch !== 'function') return;
+  if (!KV_ENABLED || dirty) return;
   try {
-    const res = await fetch(`${KV_URL}/get/${KV_KEY}`, {
-      headers: { Authorization: `Bearer ${KV_TOKEN}` },
-    });
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await kvCommand(['GET', KV_KEY]);
     if (data && data.result) {
       const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
       state = sanitizeState(parsed);
     }
+    kvError = null;
   } catch (e) {
-    // KV接続失敗時はメモリ/ローカルのstateを維持
-  }
-}
-
-/** クラウドKVへの非同期保存 */
-async function syncToKV() {
-  if (!KV_URL || !KV_TOKEN || typeof fetch !== 'function') return;
-  try {
-    await fetch(`${KV_URL}/set/${KV_KEY}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${KV_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(state),
-    });
-  } catch (e) {
-    console.warn('⚠ KVへの保存に失敗しました:', e.message);
+    kvError = '読み込み失敗: ' + e.message;
   }
 }
 
 /**
- * 保存。一時ファイルに書いてから置き換えるので、途中で落ちてもJSONが壊れません。
+ * 書き換えのあいだ、全インスタンスで1つだけ持てる鍵を取る。
+ *
+ * ★これが無いと、締切間際に複数チームが同時に購入したとき
+ *     インスタンスA: KVを読む（購入2件）→ 自分の1件を足して3件を書く
+ *     インスタンスB: KVを読む（購入2件）→ 自分の1件を足して3件を書く
+ *   となって、後から書いた方が勝ち、片方の購入が「購入しました」と言われたのに消えます。
+ *   読む前に鍵を取り、書き終えてから返すことで、この取りこぼしを防ぎます。
+ *
+ * 戻り値: 鍵の合言葉（KV未使用なら ''）。取れなかったときは null。
+ */
+async function acquireLock() {
+  if (!KV_ENABLED) return '';      // 1プロセスだけなら下の待ち行列（chain）で足りる
+  const token = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const until = Date.now() + LOCK_WAIT_MS;
+  while (true) {
+    try {
+      const r = await kvCommand(['SET', KV_LOCK_KEY, token, 'NX', 'PX', String(LOCK_TTL_MS)]);
+      if (r && r.result) return token;
+    } catch (e) {
+      kvError = '鍵の取得に失敗: ' + e.message;
+      return null;
+    }
+    if (Date.now() >= until) return null;
+    await sleep(30 + Math.floor(Math.random() * 50));   // 少しずらして再挑戦
+  }
+}
+
+/** 鍵を返す。自分が取った鍵のときだけ消す（期限切れ後に他人の鍵を消さないため）。 */
+async function releaseLock(token) {
+  if (!KV_ENABLED || !token) return;
+  const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+  try {
+    await kvCommand(['EVAL', script, '1', KV_LOCK_KEY, token]);
+  } catch (e) {
+    // EVALが使えない構成向けの保険。最悪でも LOCK_TTL_MS で自然に開く。
+    try { await kvCommand(['DEL', KV_LOCK_KEY]); } catch (e2) { /* 期限切れ待ち */ }
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/** クラウドKVへ現在の状態を書き込む。失敗したら投げる（呼び出し側が拾って表示する）。 */
+async function syncToKV() {
+  if (!KV_ENABLED) return;
+  await kvCommand(['SET', KV_KEY, JSON.stringify(state)]);
+}
+
+/**
+ * 保存。ローカルには即書きし、クラウドKVへは flush() でまとめて書き戻します。
+ * 書き戻しが終わるまでレスポンスを返さない（mutate() 参照）ので、
+ * 「保存したのに次のリクエストで元に戻る」が起きません。
  */
 function save() {
+  dirty = true;
+  saveLocal();
+}
+
+/**
+ * 溜まっている変更をクラウドKVへ書き戻す。
+ * 成功なら null、失敗ならその理由を返す（＝黙って失敗させない）。
+ */
+async function flush() {
+  if (!dirty) return null;
+  if (!KV_ENABLED) { dirty = false; return null; }
+  try {
+    await syncToKV();
+    dirty = false;
+    kvError = null;
+    return null;
+  } catch (e) {
+    kvError = '保存失敗: ' + e.message;
+    console.warn('⚠ KVへの保存に失敗しました:', e.message);
+    return kvError;
+  }
+}
+
+/**
+ * ローカルへの保存。一時ファイルに書いてから置き換えるので、途中で落ちてもJSONが壊れません。
+ */
+function saveLocal() {
   const text = JSON.stringify(state, null, 2);
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -295,7 +394,26 @@ function adminState() {
     history: state.history.map(h => ({ raceName: h.raceName, result: h.result })),
     teamTotals: totalsByTeam(),
     carryPool: teams.reduce((a, t) => a + startPointsFor(t), 0),
+    // 保存まわりの健康状態。ここが赤いまま本番に入ると受付が往復します。
+    storage: storageStatus(),
   };
+}
+
+/**
+ * 保存先の状態。運営ページの上部に警告として出します。
+ * 「動いてはいるが保存できていない」を黙って進ませないための表示です。
+ */
+function storageStatus() {
+  let warning = null;
+  if (IS_VERCEL && !KV_ENABLED) {
+    warning = '★クラウドKVが未設定です。このままだとリクエストごとに別のサーバが応答し、' +
+              '「受付中」と「締切」が数秒ごとに入れ替わって、購入もバラバラに消えます。' +
+              '環境変数 KV_REST_API_URL と KV_REST_API_TOKEN を設定して再デプロイしてください。';
+  } else if (kvError) {
+    warning = '★クラウドKVとの通信に失敗しています（' + kvError + '）。' +
+              'この間の変更は他の端末に伝わりません。';
+  }
+  return { cloud: KV_ENABLED, serverless: IS_VERCEL, error: kvError, warning: warning };
 }
 
 /* ============================================================
@@ -638,15 +756,48 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+/**
+ * 状態を書き換えるリクエストは、必ずこれを通す。
+ *   1. 全インスタンス共通の鍵を取る
+ *   2. KVから最新状態を読む
+ *   3. 書き換える
+ *   4. KVへ書き戻し終わってから鍵を返し、それから返事をする
+ *
+ * 同じインスタンス内は1本の待ち行列（chain）、インスタンスをまたぐぶんは鍵。
+ * この2段構えで「読んでから書くまでの間に他人が書く」が起きなくなります。
+ */
+let chain = Promise.resolve();
+
+function mutate(fn) {
+  const run = chain.then(async () => {
+    const lock = await acquireLock();
+    if (lock === null) {
+      return { ok: false, message: '★他の端末の処理と重なりました。もう一度押してください。' };
+    }
+    try {
+      if (dirty) await flush();     // 前回書き戻せなかったぶんを先に片付ける
+      await syncFromKV();
+      const out = fn();
+      const err = await flush();
+      if (err && out && out.ok) {
+        out.ok = false;
+        out.message = '★サーバに保存できませんでした（' + err + '）。もう一度お試しください。';
+      }
+      return out;
+    } finally {
+      await releaseLock(lock);
+    }
+  });
+  chain = run.then(() => {}, () => {});   // 失敗しても行列は止めない
+  return run;
+}
+
 async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
 
   try {
-    // クラウドKVが設定されている場合は最新データを同期
-    await syncFromKV();
-
-    /* --- 画面 --- */
+    /* --- 画面（状態を読まないので同期は不要） --- */
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
       return sendFile(res, path.join(PUBLIC, 'index.html'));
     }
@@ -662,20 +813,27 @@ async function handleRequest(req, res) {
 
     /* --- 参加者API --- */
     if (req.method === 'GET' && p === '/api/state') {
+      await syncFromKV();
       return json(res, publicState(String(url.searchParams.get('team') || '').trim()));
     }
     if (req.method === 'POST' && p === '/api/bet') {
-      return withBody(req, res, body => json(res, submitBet(body)));
+      const body = await readBody(req, res);
+      if (body === undefined) return;
+      return json(res, await mutate(() => submitBet(body)));
     }
     if (req.method === 'POST' && p === '/api/cancel') {
-      return withBody(req, res, body => json(res, cancelBet(body)));
+      const body = await readBody(req, res);
+      if (body === undefined) return;
+      return json(res, await mutate(() => cancelBet(body)));
     }
 
     /* --- 運営API --- */
     if (req.method === 'GET' && p === '/api/admin/state') {
+      await syncFromKV();
       return json(res, adminState());
     }
     if (req.method === 'GET' && p === '/api/admin/bets.csv') {
+      await syncFromKV();
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="bets.csv"',
@@ -683,6 +841,7 @@ async function handleRequest(req, res) {
       return res.end(betsCsv());
     }
     if (req.method === 'GET' && p === '/api/admin/totals.csv') {
+      await syncFromKV();
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="totals.csv"',
@@ -693,11 +852,14 @@ async function handleRequest(req, res) {
       const action = p.slice('/api/admin/'.length);
       const fn = adminActions[action];
       if (!fn) return json(res, { ok: false, message: '不明な操作です。' }, 404);
-      return withBody(req, res, body => {
-        const out = fn(body);
-        out.state = adminState();
-        json(res, out);
+      const body = await readBody(req, res);
+      if (body === undefined) return;
+      const out = await mutate(() => {
+        const o = fn(body);
+        o.state = adminState();      // 書き戻し済みの状態をそのまま返す
+        return o;
       });
+      return json(res, out);
     }
 
     /* --- その他の静的ファイル --- */
@@ -740,20 +902,39 @@ function json(res, obj, code) {
   res.end(JSON.stringify(obj));
 }
 
-function withBody(req, res, fn) {
-  let raw = '';
-  let tooBig = false;
-  req.on('data', c => {
-    raw += c;
-    if (raw.length > 100000) { tooBig = true; req.destroy(); }
-  });
-  req.on('end', () => {
-    if (tooBig) return json(res, { ok: false, message: '送信データが大きすぎます。' }, 413);
-    try {
-      fn(raw ? JSON.parse(raw) : {});
-    } catch (e) {
-      json(res, { ok: false, message: '受け取れませんでした: ' + e.message }, 400);
-    }
+/**
+ * リクエストボディを読んでJSONにする。
+ * 読めなかったときはこの中で返事まで済ませて undefined を返す
+ * （呼び出し側は undefined なら何もせず return するだけ）。
+ */
+function readBody(req, res) {
+  return new Promise(resolve => {
+    let raw = '';
+    let over = false;
+    req.on('data', c => {
+      if (over) return;
+      raw += c;
+      if (raw.length > 100000) {
+        over = true;
+        json(res, { ok: false, message: '送信データが大きすぎます。' }, 413);
+        resolve(undefined);
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (over) return;
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (e) {
+        json(res, { ok: false, message: '受け取れませんでした: ' + e.message }, 400);
+        resolve(undefined);
+      }
+    });
+    req.on('error', () => {
+      if (over) return;
+      over = true;
+      resolve(undefined);
+    });
   });
 }
 

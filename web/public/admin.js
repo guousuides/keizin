@@ -105,6 +105,8 @@ function refresh() {
  * ============================================================ */
 
 function render() {
+  renderStorageWarning();
+
   $('head').innerHTML = esc(A.settings.raceName) + '　' +
     (A.settings.open ? '<span class="badge open">受付中</span>'
                      : '<span class="badge closed">締切</span>') +
@@ -126,6 +128,19 @@ function render() {
   renderRank();
   renderTotals();
   marks();
+}
+
+/**
+ * 保存先の警告。
+ * ここが出ているときは運営が「受付開始」を押しても参加者に伝わらず、
+ * 受付中と締切が数秒ごとに入れ替わって見えます。気づかず本番に入らないよう常時表示。
+ */
+function renderStorageWarning() {
+  var el = $('storeWarn');
+  if (!el) return;
+  var w = A.storage && A.storage.warning;
+  el.textContent = w || '';
+  el.classList.toggle('hide', !w);
 }
 
 /** 入力中の欄は上書きしない（3秒ごとの自動更新で消えないように） */
