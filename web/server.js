@@ -44,6 +44,7 @@ const KV_URL = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_UR
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_REST_TOKEN || '';
 const KV_KEY = 'keiba_race_state';
 const KV_LOCK_KEY = 'keiba_race_lock';
+const KV_BACKUP_KEY = 'keiba_race_backup';   // 消す前の状態の控え（全消去の取り消し用）
 const LOCK_TTL_MS = 5000;      // 鍵の有効期限。インスタンスが落ちてもここで自動的に開く
 const LOCK_WAIT_MS = 3000;     // 鍵が空くのを待つ上限
 const KV_ENABLED = !!(KV_URL && KV_TOKEN && typeof fetch === 'function');
@@ -66,6 +67,7 @@ const KV_ENABLED = !!(KV_URL && KV_TOKEN && typeof fetch === 'function');
 let dirty = false;      // KVへ書き戻していない変更を抱えているか
 let kvError = null;     // 直近のKV通信エラー（運営ページに出す）
 let kvLoaded = false;   // 一度でもKVの内容を手にしたか（＝いまの state を信じてよいか）
+let pendingBackup = null;   // 消す直前の状態。次のKV書き込みでいっしょに退避する
 
 /* ============================================================
  *  状態の読み書き
@@ -231,6 +233,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 /** クラウドKVへ現在の状態を書き込む。失敗したら投げる（呼び出し側が拾って表示する）。 */
 async function syncToKV() {
   if (!KV_ENABLED) return;
+  if (pendingBackup) {
+    // ★本体を上書きする前に控えを書く。逆順だと、控えの書き込みに失敗したときに
+    //   元の状態がどこにも残らなくなる。
+    await kvCommand(['SET', KV_BACKUP_KEY, pendingBackup]);
+    pendingBackup = null;
+  }
   await kvCommand(['SET', KV_KEY, JSON.stringify(state)]);
   kvLoaded = true;
 }
@@ -290,6 +298,95 @@ function saveLocal() {
       console.warn('⚠ data/race.json に保存できませんでした:', e.message);
     }
   }
+}
+
+/**
+ * いまの状態を退避する。data/archive/ にファイルで書き、クラウドKVにも控えを1つ残す。
+ *
+ * ★Vercelでは data/archive/ の実体は /tmp なので、インスタンスが変われば消えます。
+ *   つまり本番で「消しすぎた」を助けてくれるのはKV側の控えだけです。
+ *   KVへの書き込みには await が要るので、ここでは印を立てるだけにして、
+ *   実際の書き込みは syncToKV() に運ばせます。
+ */
+function archiveState(tag, alsoBackup) {
+  // ファイル名に使えない文字を落とす。使ってよい文字だけ残す方が、
+  // 記号の取りこぼしが無くて安全（レース名に何が入るか分からないので）。
+  const safeTag = String(tag || 'snapshot').replace(/[^0-9A-Za-z\u3040-\u30FF\u4E00-\u9FFF _-]/g, '_');
+  try {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(ARCHIVE_DIR, stamp + '_' + safeTag + '.json'),
+      JSON.stringify(state, null, 2), 'utf8');
+  } catch (e) {
+    if (!IS_VERCEL) console.warn('⚠ アーカイブを書けませんでした:', e.message);
+  }
+  // alsoBackup に false を渡したときは、クラウドの控えを上書きしない。
+  // 「戻す」操作で控えが消えてしまうと、押し間違いを取り返せなくなるため。
+  if (alsoBackup !== false) {
+    pendingBackup = JSON.stringify({
+      savedAt: new Date().toISOString(),
+      tag: String(tag || ''),
+      state: state,
+    });
+  }
+}
+
+/**
+ * 消す前の控えを読み出す。あれば { savedAt, tag, state } を、無ければ null を返す。
+ *
+ * クラウドKVを使っているときはKVの控えが正。使っていないローカル運用のときは
+ * data/archive/ の一番新しいファイルを控えとみなします（ファイル名が時刻順なので
+ * そのまま並べ替えれば最新が分かります）。
+ */
+async function readBackup() {
+  if (KV_ENABLED) {
+    const data = await kvCommand(['GET', KV_BACKUP_KEY]);
+    if (!data || !data.result) return null;
+    return normalizeBackup(typeof data.result === 'string' ? JSON.parse(data.result) : data.result);
+  }
+  try {
+    // ★「戻す直前」の退避は控えの候補から外す。
+    //   これを混ぜると、1回戻したあとに もう一度押したとき、
+    //   戻す前（＝消えた状態）に戻ってしまい、押すたびに行き来してしまう。
+    const files = fs.readdirSync(ARCHIVE_DIR)
+      .filter(f => f.endsWith('.json') && !f.endsWith('_before-restore.json'))
+      .sort();
+    if (!files.length) return null;
+    const newest = files[files.length - 1];
+    const raw = JSON.parse(fs.readFileSync(path.join(ARCHIVE_DIR, newest), 'utf8'));
+    const b = normalizeBackup(raw);
+    if (b && !b.savedAt) b.savedAt = newest.slice(0, 24);
+    return b;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 控えの形をそろえる。
+ * 新しい版は { savedAt, tag, state } で包んでありますが、
+ * 古い版や data/archive/ のファイルは状態そのものが直に入っています。
+ */
+function normalizeBackup(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.state && typeof raw.state === 'object') return raw;
+  return { savedAt: null, tag: null, state: raw };
+}
+
+/** 控えの中身を、運営が見て判断できる程度に要約する。 */
+function backupSummary(b) {
+  if (!b) return null;
+  const s = b.state || {};
+  return {
+    savedAt: b.savedAt || null,
+    tag: b.tag || null,
+    raceName: (s.settings && s.settings.raceName) || '',
+    raceNo: s.raceNo || 1,
+    teams: (s.teams || []).filter(Boolean),
+    horses: (s.horses || []).filter(h => h && h.name).map(h => h.name),
+    bets: (s.bets || []).length,
+    history: (s.history || []).length,
+  };
 }
 
 /** 同期的に少しだけ待つ（保存のretry用）。 */
@@ -662,11 +759,7 @@ const adminActions = {
    *   （＝レース中止なのに全員が損する）ので、そのレースを丸ごと無かったことにします。
    */
   reset(body) {
-    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const name = String(state.settings.raceName || 'race').replace(/[\\/:*?"<>|]/g, '_');
-    fs.writeFileSync(path.join(ARCHIVE_DIR, `${stamp}_${name}.json`),
-      JSON.stringify(state, null, 2), 'utf8');
+    archiveState(state.settings.raceName || 'race');
 
     const settled = Engine.settle(activeHorses(), state.bets, state.result, state.settings);
     const stand = Engine.standings(activeTeams(), settled, state.result,
@@ -740,12 +833,76 @@ const adminActions = {
     };
   },
 
+  /**
+   * 全消去。チーム名・出走馬までまとめて、まっさらな初期状態に戻します。
+   *
+   * restart（全部リセット）との違い:
+   *   restart … 購入・着順・履歴・繰越を消す。チーム名と出走馬は残る（同じ面子でやり直す用）
+   *   wipe    … それに加えてチーム名と出走馬も消す（次の合宿でそのまま使い回す用）
+   *
+   * 計算の設定（係数・初期持ち点・オッズを隠すか等）は既定で残します。
+   * せっかく合わせた値を巻き添えで消さないためで、alsoSettings を付けたときだけ戻します。
+   */
+  wipe(body) {
+    archiveState('wipe');
+
+    const keep = state.settings;
+    state = freshState();
+    if (!body.alsoSettings) {
+      state.settings = Object.assign(keep, {
+        open: false,
+        raceName: '第1レース',
+      });
+    }
+    save();
+    return {
+      ok: true,
+      message: 'すべて消して初期状態に戻しました' +
+        (body.alsoSettings ? '（計算の設定も既定値に戻しました）。' : '（計算の設定は残してあります）。') +
+        (KV_ENABLED
+          ? '　消す前の状態はクラウドに1つだけ控えてあります。'
+          : '　消す前の状態は data/archive/ にあります。'),
+    };
+  },
+
+  /**
+   * 全消去の取り消し。消す前の控えを読み出して、そのまま今の状態に戻します。
+   *
+   * ★控えそのものは書き換えません。
+   *   間違って2回押しても同じ状態に戻るだけ（＝何度押しても安全）にしたいためです。
+   *   いまの状態は data/archive/ にファイルで残してから入れ替えます。
+   */
+  async restoreBackup() {
+    let backup;
+    try {
+      backup = await readBackup();
+    } catch (e) {
+      return { ok: false, message: '★控えを読み出せませんでした（' + e.message + '）。' };
+    }
+    if (!backup || !backup.state) {
+      return {
+        ok: false,
+        message: '戻せる控えがありません。控えは「全消去」「全部リセット」「次のレースへ」を押したときに作られます。',
+      };
+    }
+
+    archiveState('before-restore', false);   // いまの状態はファイルにだけ残す（控えは上書きしない）
+    state = sanitizeState(backup.state);
+    save();
+
+    const sm = backupSummary(backup);
+    return {
+      ok: true,
+      message: '控えの状態に戻しました（' +
+        (sm.savedAt ? sm.savedAt + ' 時点 / ' : '') +
+        'チーム ' + sm.teams.length + '組 / 出走馬 ' + sm.horses.length + '人 / 購入 ' + sm.bets + '件）。' +
+        '　戻す直前の状態は data/archive/ にあります。',
+    };
+  },
+
   /** 企画のやり直し。繰越も履歴も消して全チーム初期持ち点に戻す。 */
   restart() {
-    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(path.join(ARCHIVE_DIR, `${stamp}_restart.json`),
-      JSON.stringify(state, null, 2), 'utf8');
+    archiveState('restart');
 
     state.bets = [];
     state.result = ['', '', ''];
@@ -861,7 +1018,7 @@ function mutate(fn) {
         //   他の端末の購入がまとめて消えます。読めなかったら何もせずに断る。
         return { ok: false, message: '★サーバの最新状態を読めませんでした（' + kvError + '）。もう一度お試しください。' };
       }
-      const out = fn();
+      const out = await fn();      // restoreBackup のようにKVを読む操作もあるので await
       const err = await flush();
       if (err && out && out.ok) {
         out.ok = false;
@@ -932,14 +1089,23 @@ async function handleRequest(req, res) {
       });
       return res.end(totalsCsv());
     }
+    // 「戻す」を押す前に、何が入っているか運営に見せるための読み取り専用API
+    if (req.method === 'GET' && p === '/api/admin/backup') {
+      try {
+        const b = await readBackup();
+        return json(res, { ok: true, exists: !!(b && b.state), summary: backupSummary(b) });
+      } catch (e) {
+        return json(res, { ok: false, message: '控えを読み出せませんでした: ' + e.message });
+      }
+    }
     if (req.method === 'POST' && p.startsWith('/api/admin/')) {
       const action = p.slice('/api/admin/'.length);
       const fn = adminActions[action];
       if (!fn) return json(res, { ok: false, message: '不明な操作です。' }, 404);
       const body = await readBody(req, res);
       if (body === undefined) return;
-      const out = await mutate(() => {
-        const o = fn(body);
+      const out = await mutate(async () => {
+        const o = await fn(body);
         o.state = adminState();      // 書き戻し済みの状態をそのまま返す
         return o;
       });

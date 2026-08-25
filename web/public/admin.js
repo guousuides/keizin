@@ -63,6 +63,45 @@ function boot() {
   };
 
   $('btnCarry').onclick = saveCarry;
+  $('btnWipe').onclick = function () {
+    var also = $('wipeSettings').checked;
+    if (!confirm('すべて消して、まっさらな状態に戻します。\n\n' +
+                 '消えるもの:\n' +
+                 '　・チーム名\n' +
+                 '　・出走馬とコメント\n' +
+                 '　・購入と着順\n' +
+                 '　・全レースの履歴と繰越の持ち点\n\n' +
+                 (also ? '計算の設定も既定値に戻します。\n\n'
+                       : '計算の設定（係数・初期持ち点など）は残します。\n\n') +
+                 'よいですか？')) return;
+    if (!confirm('本当に消してよいですか？\n' +
+                 '受付中の参加者がいる場合、その場で全員の画面が空になります。')) return;
+    post('wipe', { alsoSettings: also });
+  };
+  $('btnRestore').onclick = function () {
+    // 押す前に、控えに何が入っているかを見せる（中身を知らずに戻させない）
+    fetch('/api/admin/backup')
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) { show(res.message, false); return; }
+        if (!res.exists) {
+          show('戻せる控えがありません。控えは「全消去」「全部リセット」「次のレースへ」を押したときに作られます。', false);
+          return;
+        }
+        var m = res.summary;
+        var when = m.savedAt ? new Date(m.savedAt).toLocaleString('ja-JP') : '（時刻不明）';
+        if (!confirm('控えの状態に戻します。\n\n' +
+                     '控えの中身:\n' +
+                     '　保存時刻 : ' + when + '\n' +
+                     '　レース   : ' + (m.raceName || '(名前なし)') + '（第' + m.raceNo + 'レース）\n' +
+                     '　チーム   : ' + (m.teams.length ? m.teams.join('、') : 'なし') + '\n' +
+                     '　出走馬   : ' + (m.horses.length ? m.horses.join('、') : 'なし') + '\n' +
+                     '　購入     : ' + m.bets + '件 / 履歴 ' + m.history + 'レース\n\n' +
+                     'いまの状態はこれで置き換わります。よいですか？')) return;
+        post('restoreBackup', {});
+      })
+      .catch(function (e) { show('通信エラー：' + e.message, false); });
+  };
   $('btnRestart').onclick = function () {
     if (!confirm('繰越の持ち点と全レースの履歴を消して、1レース目に戻します。\n' +
                  '全チームが初期持ち点からやり直しになります。よいですか？')) return;
@@ -437,6 +476,8 @@ var CLEARS = {
   carry:    ['carry'],
   reset:    ['horses', 'teams', 'settings', 'result', 'carry'],
   restart:  ['horses', 'teams', 'settings', 'result', 'carry'],
+  wipe:     ['horses', 'teams', 'settings', 'result', 'carry'],
+  restoreBackup: ['horses', 'teams', 'settings', 'result', 'carry'],
 };
 
 function post(action, body) {
@@ -453,7 +494,10 @@ function post(action, body) {
 
       // 保存できたフォームだけ「未保存」を解除して、サーバの値で描き直す
       (CLEARS[action] || []).forEach(function (k) { dirty[k] = false; });
-      if (action === 'settings') $('setRows').dataset.built = '';
+      // 全消去で設定が既定値に戻ったときも、古い値のまま残らないように作り直す
+      if (action === 'settings' || action === 'wipe' || action === 'restoreBackup') {
+        $('setRows').dataset.built = '';
+      }
       renderHorses(true);
       renderTeams(true);
       renderCarry(true);

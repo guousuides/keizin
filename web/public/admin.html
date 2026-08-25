@@ -89,6 +89,14 @@
         <button class="sec" id="btnCarry">持ち点を書き換える</button>
         <button class="sec danger" id="btnRestart">全部リセット（1レース目に戻す）</button>
       </div>
+      <div class="grid" style="margin-top:8px">
+        <button class="sec danger" id="btnWipe">⚠ 全消去（チーム名・出走馬も消す）</button>
+        <button class="sec" id="btnRestore">↩ 消す前の状態に戻す</button>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);cursor:pointer">
+          <input type="checkbox" id="wipeSettings">
+          計算の設定（係数・初期持ち点・オッズを隠すか等）も既定値に戻す
+        </label>
+      </div>
       <div><span class="unsaved hide" id="markCarry">● 未保存 — 「持ち点を書き換える」を押してください</span></div>
       <div class="why">
         いま各チームがこのレースを何ptで始めたかです。ふだんは触る必要がありません
@@ -97,6 +105,17 @@
         <b>受付中に下げると参加者の残高が減ります。</b>すでに購入した点数より少ない値にすると残高がマイナスになるので、
         その場合は購入の取消（⑤タブ）を先にしてください。<br>
         「全部リセット」は繰越と全レースの履歴を消して、全チームを初期持ち点に戻します（企画のやり直し用）。
+        <b>チーム名と出走馬は残る</b>ので、同じ面子でもう一度やるときはこちらです。<br><br>
+        <b>「⚠ 全消去」はチーム名と出走馬まで消します。</b>
+        次の合宿でこのアプリをそのまま使い回すとき用です。消えるのは
+        チーム名 / 出走馬とコメント / 購入 / 着順 / 全レースの履歴 / 繰越の持ち点。
+        計算の設定はチェックを入れないかぎり残ります。
+        消す前の状態は <code>data/archive/</code> に保存され、クラウドKVを使っているときは
+        そちらにも控えが1つ残ります（<code>keiba_race_backup</code>）。<br><br>
+        <b>「↩ 消す前の状態に戻す」</b>は、その控えを今の状態として書き戻します。
+        押す前に控えの中身（保存時刻・チーム名・出走馬・購入件数）を確認ダイアログで出すので、
+        中身を見てから決められます。控え自体は上書きしないので、<b>間違って2回押しても同じ状態に戻るだけ</b>です。
+        Vercelでは <code>data/archive/</code> は消えてしまうため、戻せるのはクラウドKVの控え1つぶんだけです。
       </div>
     </div>
   </section>
