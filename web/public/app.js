@@ -11,6 +11,7 @@
 'use strict';
 
 var S = null;        // サーバから受け取った状態
+var needBuild = true;  // 選択欄をまだ作れていない（初回の取得に失敗したときも作り直す）
 var ticket = null;   // 選択中の券種
 var busy = false;
 var timer = null;
@@ -40,17 +41,37 @@ function boot() {
 /** サーバから最新状態を取り直す。first=true のときは選択欄も作り直す。 */
 function refresh(first) {
   var team = localStorage.getItem(LS_KEY) || '';
+  if (first) needBuild = true;
   fetch('/api/state?team=' + encodeURIComponent(team))
     .then(function (r) { return r.json(); })
     .then(function (s) {
+      if (s && s.unavailable) {
+        // ★サーバが最新状態を読めなかっただけ。ここで S を差し替えると
+        //   「締切」に見えてしまい、受付中と締切が往復しているように映る。
+        //   前回の内容をそのまま残し、通信の問題だと分かる表示にする。
+        showTrouble(s.message);
+        return;
+      }
       S = s;
-      if (first) buildSelectors();
+      if (needBuild) { buildSelectors(); needBuild = false; }
       render();
     })
     .catch(function (e) {
-      $('status').innerHTML = '<span class="badge closed">接続できません</span> ' +
-        'サーバが起動しているか確認してください。';
+      showTrouble('サーバと通信できません。');
     });
+}
+
+/**
+ * 通信できなかったときの表示。
+ *
+ * ★締切と同じ赤いバッジを出さないこと。
+ *   買えない理由が「締切」なのか「通信」なのか参加者に区別がつかなくなり、
+ *   「さっきは買えたのに今は買えない」という混乱の元になります。
+ */
+function showTrouble(msg) {
+  $('status').innerHTML = '<span class="badge pend">通信中…</span> ' +
+    esc(msg || 'サーバと通信できません。') +
+    ' <small>（締切ではありません。数秒後にやり直します）</small>';
 }
 
 /* ---------- 選択欄の組み立て ---------- */

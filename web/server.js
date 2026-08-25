@@ -65,6 +65,7 @@ const KV_ENABLED = !!(KV_URL && KV_TOKEN && typeof fetch === 'function');
  */
 let dirty = false;      // KVへ書き戻していない変更を抱えているか
 let kvError = null;     // 直近のKV通信エラー（運営ページに出す）
+let kvLoaded = false;   // 一度でもKVの内容を手にしたか（＝いまの state を信じてよいか）
 
 /* ============================================================
  *  状態の読み書き
@@ -140,16 +141,49 @@ async function kvCommand(args) {
  */
 async function syncFromKV() {
   if (!KV_ENABLED || dirty) return;
+  let data;
   try {
-    const data = await kvCommand(['GET', KV_KEY]);
-    if (data && data.result) {
-      const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-      state = sanitizeState(parsed);
-    }
-    kvError = null;
+    data = await kvCommand(['GET', KV_KEY]);
   } catch (e) {
     kvError = '読み込み失敗: ' + e.message;
+    throw new Error(kvError);      // ★握りつぶさない。理由は下の syncForRead を参照
   }
+  if (data && data.result) {
+    const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+    state = sanitizeState(parsed);
+  }
+  // 中身が空（result が null）でも「まだ誰も保存していない」という正しい答えなので信用してよい
+  kvLoaded = true;
+  kvError = null;
+}
+
+/**
+ * 読み取り専用リクエストのための同期。
+ *
+ * ★ここが「受付と締切が往復する」の残り火だったところ。
+ *   起動直後のインスタンスの state は freshState()＝「締切・購入0件」です。
+ *   KVの読み込みに1回失敗しただけでそのまま返すと、参加者の3秒ごとの自動更新の
+ *   なかでその1回だけが「締切」になり、受付中と締切が入れ替わって見えます。
+ *   読めなかったときは推測で答えず、false を返して呼び出し側に断らせます。
+ *
+ * 戻り値 false＝「いま返せる正しい状態が無い」。
+ */
+async function syncForRead() {
+  try {
+    await syncFromKV();
+    return true;
+  } catch (e) {
+    return kvLoaded;   // 一度でも読めているなら、その内容を出す方が無言の「締切」よりまし
+  }
+}
+
+/** 状態を読めなかったことを、締切と誤解されない言葉で伝える。 */
+function sendUnavailable(res) {
+  return json(res, {
+    unavailable: true,
+    message: 'サーバの最新状態を読み取れませんでした。締切ではありません。数秒後に自動でやり直します。',
+    detail: kvError || '',
+  }, 503);
 }
 
 /**
@@ -198,6 +232,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function syncToKV() {
   if (!KV_ENABLED) return;
   await kvCommand(['SET', KV_KEY, JSON.stringify(state)]);
+  kvLoaded = true;
 }
 
 /**
@@ -772,11 +807,25 @@ function mutate(fn) {
   const run = chain.then(async () => {
     const lock = await acquireLock();
     if (lock === null) {
-      return { ok: false, message: '★他の端末の処理と重なりました。もう一度押してください。' };
+      // 鍵が取れない理由は2つある。順番待ちで詰まったのか、KVと話せていないのか。
+      // 参加者には理由で言い方を変える（「重なった」と言われて何度も押させないため）。
+      const jammed = kvError && kvError.indexOf('鍵の取得に失敗') === 0;
+      return {
+        ok: false,
+        message: jammed
+          ? '★サーバと通信できませんでした（' + kvError + '）。少し待ってからもう一度押してください。'
+          : '★他の端末の処理と重なりました。もう一度押してください。',
+      };
     }
     try {
       if (dirty) await flush();     // 前回書き戻せなかったぶんを先に片付ける
-      await syncFromKV();
+      try {
+        await syncFromKV();
+      } catch (e) {
+        // ★最新を読めていないまま書き換えると、起動直後の空の状態でKVを上書きしてしまい、
+        //   他の端末の購入がまとめて消えます。読めなかったら何もせずに断る。
+        return { ok: false, message: '★サーバの最新状態を読めませんでした（' + kvError + '）。もう一度お試しください。' };
+      }
       const out = fn();
       const err = await flush();
       if (err && out && out.ok) {
@@ -813,7 +862,7 @@ async function handleRequest(req, res) {
 
     /* --- 参加者API --- */
     if (req.method === 'GET' && p === '/api/state') {
-      await syncFromKV();
+      if (!(await syncForRead())) return sendUnavailable(res);   // 読めなかったら推測で答えない
       return json(res, publicState(String(url.searchParams.get('team') || '').trim()));
     }
     if (req.method === 'POST' && p === '/api/bet') {
@@ -829,11 +878,11 @@ async function handleRequest(req, res) {
 
     /* --- 運営API --- */
     if (req.method === 'GET' && p === '/api/admin/state') {
-      await syncFromKV();
+      if (!(await syncForRead())) return sendUnavailable(res);   // 読めなかったら推測で答えない
       return json(res, adminState());
     }
     if (req.method === 'GET' && p === '/api/admin/bets.csv') {
-      await syncFromKV();
+      if (!(await syncForRead())) return sendUnavailable(res);   // 読めなかったら推測で答えない
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="bets.csv"',
@@ -841,7 +890,7 @@ async function handleRequest(req, res) {
       return res.end(betsCsv());
     }
     if (req.method === 'GET' && p === '/api/admin/totals.csv') {
-      await syncFromKV();
+      if (!(await syncForRead())) return sendUnavailable(res);   // 読めなかったら推測で答えない
       res.writeHead(200, {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="totals.csv"',

@@ -96,7 +96,15 @@ function boot() {
 function refresh() {
   fetch('/api/admin/state')
     .then(function (r) { return r.json(); })
-    .then(function (a) { A = a; render(); })
+    .then(function (a) {
+      // ★読めなかったときの応答で A を上書きしない（空の画面で塗り潰さないため）
+      if (a && a.unavailable) {
+        $('head').textContent = '⚠ ' + a.message;
+        return;
+      }
+      A = a;
+      render();
+    })
     .catch(function () { $('head').textContent = '⚠ サーバに接続できません。'; });
 }
 
