@@ -110,7 +110,8 @@ function render() {
   $('buyCard').classList.toggle('hide', !S.open);
 
   renderBalance();
-  $('oddsLabel').textContent = S.open ? '現在のオッズ（変動中）' : '確定オッズ';
+  $('oddsLabel').textContent = S.oddsHidden ? 'オッズ（締切後に開示）'
+    : (S.open ? '現在のオッズ（変動中）' : '確定オッズ');
   $('go').disabled = busy || !S.open;
 
   renderOdds();
@@ -141,6 +142,15 @@ function renderBalance() {
 }
 
 function renderOdds() {
+  // 受付中に伏せているときは、出走馬とコメントだけ出す（数値はサーバから来ていない）
+  if (S.oddsHidden) {
+    $('oddsBody').innerHTML = S.horses.map(function (h) {
+      return '<tr><td>' + esc(h.name) +
+        (h.comment ? ' <span style="color:var(--dim);font-size:11px">' + esc(h.comment) + '</span>' : '') +
+        '</td><td colspan="4" style="color:var(--dim)">締切後に開示</td></tr>';
+    }).join('');
+    return;
+  }
   $('oddsBody').innerHTML = S.horses.map(function (h) {
     var mark = '';
     if (S.resultReady) {
@@ -186,7 +196,8 @@ function renderHist() {
 
   var used = S.me ? S.me.used : 0;
   $('histNote').textContent = '合計 ' + S.myBets.length + '点 / ' + fmt(used) + 'pt 使用' +
-    (S.open ? '（オッズは他のチームの購入で動くので、上の倍率は今の暫定値です）' : '');
+    (S.oddsHidden ? '（倍率は締切後に確定・開示されます）'
+      : (S.open ? '（オッズは他のチームの購入で動くので、上の倍率は今の暫定値です）' : ''));
 }
 
 function renderResult() {
@@ -286,6 +297,14 @@ function quote() {
   }
   if (chosen.length !== ps.length) {
     box.textContent = S.picks[ticket] + '人を選んでください。';
+    return;
+  }
+  if (S.oddsHidden) {
+    // ★ここで倍率を出すと隠した意味がなくなる。そもそも計算に必要な数値が来ていない。
+    box.innerHTML = 'オッズは<b>締切後に開示</b>されます。' +
+      '<br><span style="color:var(--dim);font-size:11px">' +
+      '受付中に倍率が見えると後から買う人が有利になるため伏せています。' +
+      '当たったときの払戻は、締切時点の確定オッズで計算されます。</span>';
     return;
   }
   if (S.totals.empty) {

@@ -101,7 +101,9 @@
     } else if (S.open) {
       badge.innerHTML = '<span style="display:inline-block;width:8px;height:8px;background:#fff;border-radius:50%;margin-right:2px"></span> 投票受付中';
       badge.className = 'status-badge open';
-      $('oddsStateText').textContent = 'リアルタイム更新中（受付中）';
+      $('oddsStateText').textContent = S.oddsHidden
+        ? '締切と同時に一斉開示します'
+        : 'リアルタイム更新中（受付中）';
     } else {
       badge.textContent = '⏹ 受付締切（オッズ確定）';
       badge.className = 'status-badge closed';
@@ -111,7 +113,9 @@
     // KPIチップ
     var sumA = S.totals ? (S.totals.sumA || 0) : 0;
     var betCount = S.betCount !== undefined ? S.betCount : 0;
-    $('totalPool').innerHTML = fmt(sumA) + ' <small style="font-size:12px;font-weight:normal;color:var(--dim)">pt</small>';
+    $('totalPool').innerHTML = S.oddsHidden
+      ? '<span style="color:var(--dim)">— <small style="font-size:12px;font-weight:normal">締切後</small></span>'
+      : fmt(sumA) + ' <small style="font-size:12px;font-weight:normal;color:var(--dim)">pt</small>';
     $('betCount').innerHTML = fmt(betCount) + ' <small style="font-size:12px;font-weight:normal;color:var(--dim)">点</small>';
   }
 
@@ -172,6 +176,27 @@
 
     if (!horses.length) {
       tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--dim)">出走馬が登録されていません</td></tr>';
+      return;
+    }
+
+    // 受付中はオッズを伏せる。出走馬とひとことだけ出して、締切で一斉に開く。
+    // （数値はサーバから送られてきていないので、ここで出したくても出せない）
+    if (S.oddsHidden) {
+      tbody.innerHTML = horses.map(function (h, idx) {
+        var wakuCls = WAKU_CLASSES[(h.no ? (h.no - 1) : idx) % WAKU_CLASSES.length];
+        return '<tr class="odds-row">' +
+          '<td><span class="horse-num ' + wakuCls + '">' + (h.no || (idx + 1)) + '</span></td>' +
+          '<td>' +
+            '<div class="horse-cell">' +
+              '<div class="horse-name-wrap"><span class="horse-name">' + esc(h.name) + '</span></div>' +
+              (h.comment ? '<div class="horse-comment">' + esc(h.comment) + '</div>' : '') +
+            '</div>' +
+          '</td>' +
+          '<td colspan="4" style="text-align:center;color:var(--dim);letter-spacing:.08em">' +
+            '🔒 締切と同時に開示' +
+          '</td>' +
+        '</tr>';
+      }).join('');
       return;
     }
 

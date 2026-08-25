@@ -254,14 +254,20 @@ function renderSettings() {
   if (dirty.settings) return;
   if (box.dataset.built) {
     Array.prototype.forEach.call(box.querySelectorAll('[data-k]'), function (inp) {
-      if (!keep(inp)) inp.value = A.settings[inp.dataset.k];
+      if (keep(inp)) return;
+      if (inp.type === 'checkbox') inp.checked = !!A.settings[inp.dataset.k];
+      else inp.value = A.settings[inp.dataset.k];
     });
     return;
   }
   box.innerHTML = A.settingInfo.map(function (info) {
     var v = A.settings[info.key];
     var field;
-    if (info.type === 'select') {
+    if (info.type === 'check') {
+      field = '<label style="display:flex;align-items:center;gap:7px;cursor:pointer">' +
+        '<input data-k="' + info.key + '" type="checkbox"' + (v ? ' checked' : '') + '>' +
+        '<span>' + (v ? '隠す' : '出す') + '</span></label>';
+    } else if (info.type === 'select') {
       field = '<select data-k="' + info.key + '">' + info.options.map(function (o) {
         return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>';
       }).join('') + '</select>';
@@ -385,7 +391,7 @@ function saveResult() {
 function saveSettings() {
   var s = {};
   Array.prototype.forEach.call($('setRows').querySelectorAll('[data-k]'), function (inp) {
-    s[inp.dataset.k] = inp.value;
+    s[inp.dataset.k] = (inp.type === 'checkbox') ? inp.checked : inp.value;
   });
   post('settings', { settings: s });
 }

@@ -351,6 +351,23 @@ function totalsByTeam() {
  *  参加者向けの状態
  * ============================================================ */
 
+/**
+ * オッズに関わる数値を全部 null にした馬の一覧を作る。
+ *
+ * ★画面側で消すだけでは対策になりません。
+ *   /api/state の中身は開発者ツールで誰でも読めるので、
+ *   「送らない」ところまでやって初めて隠したことになります。
+ */
+function maskHorses(rows) {
+  return rows.map(h => ({
+    no: h.no,
+    name: h.name,
+    comment: h.comment,
+    breakdown: { win: null, place: null, tri: null, trio: null },
+    pool: null, p: null, raw: null, win: null, place: null,
+  }));
+}
+
 function publicState(teamName) {
   const s = state.settings;
   const horses = activeHorses();
@@ -360,9 +377,22 @@ function publicState(teamName) {
   const stand = Engine.standings(teams, settled, state.result, s, state.carry);
 
   const me = teamName ? stand.find(r => r.team === teamName) : null;
-  const myBets = teamName
+  let myBets = teamName
     ? settled.filter(b => b.team === teamName).slice().reverse()   // 新しい順
     : [];
+
+  /**
+   * ★受付中はオッズを伏せる。
+   *   受付中にオッズが見えると、後から買う人ほど有利になるので
+   *   みんなが締切間際まで買い控えます。締切を押した瞬間に一斉開示します。
+   *   着順が入ったあとは、隠す意味がないので必ず出します。
+   */
+  const ready = Engine.resultReady(state.result);
+  const hideOdds = !!s.hideOddsUntilClose && !!s.open && !ready;
+  if (hideOdds) {
+    // 自分の買った馬券の倍率も、そこから支持率を逆算できるので伏せる
+    myBets = myBets.map(b => Object.assign({}, b, { odds: null }));
+  }
 
   return {
     raceName: s.raceName,
@@ -373,9 +403,12 @@ function publicState(teamName) {
     result: Engine.resultReady(state.result) ? state.result : ['', '', ''],
     tickets: Engine.TICKETS,
     picks: Engine.PICKS,
-    horses: table.horses,
-    totals: { sumA: table.sumA, T: table.T, empty: table.empty },
-    betCount: state.bets.length,
+    oddsHidden: hideOdds,          // 画面が「締切後に開示」と出すための印
+    horses: hideOdds ? maskHorses(table.horses) : table.horses,
+    totals: hideOdds
+      ? { sumA: null, T: null, empty: table.empty }
+      : { sumA: table.sumA, T: table.T, empty: table.empty },
+    betCount: state.bets.length,   // 「何点買われたか」だけ。どの馬かは分からないので出してよい
     teams: teams,
     initialPoints: s.initialPoints,
     // ブラウザ側でも同じ engine.js を使って想定オッズを出すために設定を渡す
@@ -530,6 +563,8 @@ const adminActions = {
       if (info.type === 'number') {
         const n = Number(v);
         if (isFinite(n)) s[info.key] = n;
+      } else if (info.type === 'check') {
+        s[info.key] = (v === true || v === 'true' || v === '1' || v === 'on');
       } else {
         s[info.key] = String(v);
       }
