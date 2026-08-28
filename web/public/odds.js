@@ -102,19 +102,21 @@
       badge.innerHTML = '<span style="display:inline-block;width:8px;height:8px;background:#fff;border-radius:50%;margin-right:2px"></span> 投票受付中';
       badge.className = 'status-badge open';
       $('oddsStateText').textContent = S.oddsHidden
-        ? '締切と同時に一斉開示します'
+        ? revealLine()
         : 'リアルタイム更新中（受付中）';
     } else {
       badge.textContent = '⏹ 受付締切（オッズ確定）';
       badge.className = 'status-badge closed';
-      $('oddsStateText').textContent = '確定オッズ（締切済）';
+      // 締切後でも、運営が手動で伏せているあいだは出さない
+      $('oddsStateText').textContent = S.oddsHidden ? revealLine() : '確定オッズ（締切済）';
     }
 
     // KPIチップ
     var sumA = S.totals ? (S.totals.sumA || 0) : 0;
     var betCount = S.betCount !== undefined ? S.betCount : 0;
     $('totalPool').innerHTML = S.oddsHidden
-      ? '<span style="color:var(--dim)">— <small style="font-size:12px;font-weight:normal">締切後</small></span>'
+      ? '<span style="color:var(--dim)">— <small style="font-size:12px;font-weight:normal">' +
+        (S.oddsHiddenMode === 'manual' ? '開示後' : '締切後') + '</small></span>'
       : fmt(sumA) + ' <small style="font-size:12px;font-weight:normal;color:var(--dim)">pt</small>';
     $('betCount').innerHTML = fmt(betCount) + ' <small style="font-size:12px;font-weight:normal;color:var(--dim)">点</small>';
   }
@@ -193,7 +195,7 @@
             '</div>' +
           '</td>' +
           '<td colspan="4" style="text-align:center;color:var(--dim);letter-spacing:.08em">' +
-            '🔒 締切と同時に開示' +
+            '🔒 ' + revealLine() +
           '</td>' +
         '</tr>';
       }).join('');
@@ -268,6 +270,15 @@
     var horses = S.horses || [];
     var triListEl = $('trifectaList');
     var trioListEl = $('trioList');
+
+    // 伏せているあいだは倍率がサーバから来ていないので、そのまま計算させると
+    // 全部 null になって「オッズ算出中…」と出たまま止まってしまう。明示的に伏せる。
+    if (S.oddsHidden) {
+      var hiddenMsg = '<div class="empty-ranking">🔒 ' + revealLine() + '</div>';
+      triListEl.innerHTML = hiddenMsg;
+      trioListEl.innerHTML = hiddenMsg;
+      return;
+    }
 
     if (horses.length < 3 || S.totals.empty) {
       var emptyMsg = '<div class="empty-ranking">投票が入るとここに上位人気が表示されます</div>';
@@ -367,11 +378,29 @@
                   ('0' + now.getMinutes()).slice(-2) + ':' +
                   ('0' + now.getSeconds()).slice(-2);
     $('updateTime').textContent = '最終更新: ' + timeStr;
+
+    var note = $('footerNote');
+    if (note) {
+      note.textContent = (S && S.oddsHidden)
+        ? '※ ' + revealLine() + '。それまで倍率・支持率・投票ptは出しません。'
+        : '※ オッズは受付締切まで変動します。確定するのは受付締切の瞬間です。';
+    }
   }
 
   /* ============================================================
    *  小道具
    * ============================================================ */
+  /**
+   * 伏せているあいだの見出し。
+   * ふだんは締切で自動的に開くが、運営が手動で伏せているあいだは締切を過ぎても開かないので、
+   * 「締切と同時に開示」と出したままにしない。
+   */
+  function revealLine() {
+    return (S && S.oddsHiddenMode === 'manual')
+      ? '運営が開示するまでお待ちください'
+      : '締切と同時に開示';
+  }
+
   function fmt(n) {
     return Number(n || 0).toLocaleString('ja-JP');
   }

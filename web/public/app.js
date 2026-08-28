@@ -110,7 +110,7 @@ function render() {
   $('buyCard').classList.toggle('hide', !S.open);
 
   renderBalance();
-  $('oddsLabel').textContent = S.oddsHidden ? 'オッズ（締切後に開示）'
+  $('oddsLabel').textContent = S.oddsHidden ? ('オッズ（' + revealText('label') + '）')
     : (S.open ? '現在のオッズ（変動中）' : '確定オッズ');
   $('go').disabled = busy || !S.open;
 
@@ -141,13 +141,30 @@ function renderBalance() {
   $('balNote').textContent = note;
 }
 
+/**
+ * 伏せているあいだの言い回し。
+ *
+ * ふだんは締切を押した瞬間に自動で開きますが、運営が手動で伏せているあいだは
+ * 締切を過ぎても開きません。「締切後に開示」と出したまま出てこないと不親切なので、
+ * そこだけ言い方を変えます。
+ */
+function revealText(kind) {
+  var manual = S.oddsHiddenMode === 'manual';
+  if (kind === 'label') return manual ? '運営が開示するまで非表示' : '締切後に開示';
+  if (kind === 'cell')  return manual ? '運営が開示するまでお待ちください' : '締切後に開示';
+  if (kind === 'hist')  return manual ? '（倍率は運営が開示したときに出ます）'
+                                      : '（倍率は締切後に確定・開示されます）';
+  return manual ? 'オッズは<b>運営が開示したとき</b>に出ます。'
+                : 'オッズは<b>締切後に開示</b>されます。';
+}
+
 function renderOdds() {
   // 受付中に伏せているときは、出走馬とコメントだけ出す（数値はサーバから来ていない）
   if (S.oddsHidden) {
     $('oddsBody').innerHTML = S.horses.map(function (h) {
       return '<tr><td>' + esc(h.name) +
         (h.comment ? ' <span style="color:var(--dim);font-size:11px">' + esc(h.comment) + '</span>' : '') +
-        '</td><td colspan="4" style="color:var(--dim)">締切後に開示</td></tr>';
+        '</td><td colspan="4" style="color:var(--dim)">' + revealText('cell') + '</td></tr>';
     }).join('');
     return;
   }
@@ -196,7 +213,7 @@ function renderHist() {
 
   var used = S.me ? S.me.used : 0;
   $('histNote').textContent = '合計 ' + S.myBets.length + '点 / ' + fmt(used) + 'pt 使用' +
-    (S.oddsHidden ? '（倍率は締切後に確定・開示されます）'
+    (S.oddsHidden ? revealText('hist')
       : (S.open ? '（オッズは他のチームの購入で動くので、上の倍率は今の暫定値です）' : ''));
 }
 
@@ -301,7 +318,7 @@ function quote() {
   }
   if (S.oddsHidden) {
     // ★ここで倍率を出すと隠した意味がなくなる。そもそも計算に必要な数値が来ていない。
-    box.innerHTML = 'オッズは<b>締切後に開示</b>されます。' +
+    box.innerHTML = revealText('quote') +
       '<br><span style="color:var(--dim);font-size:11px">' +
       '受付中に倍率が見えると後から買う人が有利になるため伏せています。' +
       '当たったときの払戻は、締切時点の確定オッズで計算されます。</span>';
