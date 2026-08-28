@@ -455,6 +455,33 @@ function totalsByTeam() {
  *   /api/state の中身は開発者ツールで誰でも読めるので、
  *   「送らない」ところまでやって初めて隠したことになります。
  */
+/**
+ * いまオッズを伏せているか。
+ *
+ * ふだんは③設定の「受付中はオッズを隠す」にまかせます（受付中だけ伏せ、締切で一斉開示）。
+ * それとは別に、①進行の手動トグル（settings.oddsReveal）でその場で上書きできます。
+ *   'show' … 受付中でもいま開示する
+ *   'hide' … 締切を過ぎても伏せたままにする（スクリーンで溜めてから見せたいとき）
+ *   'auto' … 上書きしない（既定。受付を開始するたびここに戻ります）
+ *
+ * 着順が3つ埋まったあとは、どの指示でも必ず開示します。
+ * 払戻ptを出す時点で「払戻 ÷ 賭けpt」から倍率が分かるので、隠す意味が無くなるためです。
+ */
+function oddsHiddenNow() {
+  const s = state.settings;
+  if (Engine.resultReady(state.result)) return false;
+  if (s.oddsReveal === 'show') return false;
+  if (s.oddsReveal === 'hide') return true;
+  return !!s.hideOddsUntilClose && !!s.open;
+}
+
+/** 伏せているとき、何を待てば開くのか。画面の文言を出し分けるために渡します。 */
+function oddsHiddenMode() {
+  if (!oddsHiddenNow()) return null;
+  // 手動で「伏せる」を選んでいるあいだは、締切を押しても開きません
+  return state.settings.oddsReveal === 'hide' ? 'manual' : 'untilClose';
+}
+
 function maskHorses(rows) {
   return rows.map(h => ({
     no: h.no,
@@ -478,14 +505,7 @@ function publicState(teamName) {
     ? settled.filter(b => b.team === teamName).slice().reverse()   // 新しい順
     : [];
 
-  /**
-   * ★受付中はオッズを伏せる。
-   *   受付中にオッズが見えると、後から買う人ほど有利になるので
-   *   みんなが締切間際まで買い控えます。締切を押した瞬間に一斉開示します。
-   *   着順が入ったあとは、隠す意味がないので必ず出します。
-   */
-  const ready = Engine.resultReady(state.result);
-  const hideOdds = !!s.hideOddsUntilClose && !!s.open && !ready;
+  const hideOdds = oddsHiddenNow();
   if (hideOdds) {
     // 自分の買った馬券の倍率も、そこから支持率を逆算できるので伏せる
     myBets = myBets.map(b => Object.assign({}, b, { odds: null }));
@@ -500,7 +520,8 @@ function publicState(teamName) {
     result: Engine.resultReady(state.result) ? state.result : ['', '', ''],
     tickets: Engine.TICKETS,
     picks: Engine.PICKS,
-    oddsHidden: hideOdds,          // 画面が「締切後に開示」と出すための印
+    oddsHidden: hideOdds,          // 画面が「まだ出さない」と出すための印
+    oddsHiddenMode: oddsHiddenMode(),   // 何を待てば開くのか（'untilClose' / 'manual'）
     horses: hideOdds ? maskHorses(table.horses) : table.horses,
     totals: hideOdds
       ? { sumA: null, T: null, empty: table.empty }
@@ -706,12 +727,49 @@ const adminActions = {
   /** 受付の開始・締切。締切を押した瞬間のオッズが確定オッズ。 */
   open(body) {
     state.settings.open = !!body.open;
+    // ★受付を開始したら手動の開示指示は捨てる。
+    //   前のレースで「今すぐ開示」を押したままだと、次のレースが最初から丸見えで始まってしまいます。
+    if (state.settings.open) state.settings.oddsReveal = 'auto';
     save();
     return {
       ok: true,
       message: state.settings.open
         ? '受付を開始しました。参加者は購入できます。'
         : '受付を締め切りました。この時点のオッズで確定です。',
+    };
+  },
+
+  /**
+   * オッズをいま開示するか、伏せたままにするか（①進行の手動トグル）。
+   *   show … 受付中でもいま開示する
+   *   hide … 締切を過ぎても伏せたままにする（スクリーンで溜めてから見せたいとき）
+   *   auto … ③設定の「受付中はオッズを隠す」にまかせる（既定）
+   * 隠すのはサーバ側なので、参加者が開発者ツールを開いても倍率は出てきません。
+   */
+  oddsReveal(body) {
+    const v = String(body.mode || '').trim();
+    if (['auto', 'show', 'hide'].indexOf(v) < 0) {
+      return { ok: false, message: '不明な指定です。' };
+    }
+    state.settings.oddsReveal = v;
+    save();
+    const hidden = oddsHiddenNow();
+    if (Engine.resultReady(state.result)) {
+      return { ok: true, message: '着順が入っているので、指定に関わらずオッズは開示されています。' };
+    }
+    if (v === 'auto') {
+      return {
+        ok: true,
+        message: hidden
+          ? '自動にまかせます。いまは受付中なので伏せたままです（締切と同時に開示されます）。'
+          : '自動にまかせます。いまは開示されています。',
+      };
+    }
+    return {
+      ok: true,
+      message: v === 'show'
+        ? 'オッズを開示しました。参加者ページと /odds に倍率が出ます。'
+        : 'オッズを伏せました。締切を押しても、もう一度開示するまで出ません。',
     };
   },
 
@@ -796,6 +854,7 @@ const adminActions = {
     state.result = ['', '', ''];
     state.seq = 0;
     state.settings.open = false;
+    state.settings.oddsReveal = 'auto';   // 前のレースの開示指示は持ち越さない
     if (body.raceName) {
       state.settings.raceName = String(body.raceName).trim();
     } else if (ready) {
@@ -851,6 +910,7 @@ const adminActions = {
     if (!body.alsoSettings) {
       state.settings = Object.assign(keep, {
         open: false,
+        oddsReveal: 'auto',
         raceName: '第1レース',
       });
     }
@@ -911,6 +971,7 @@ const adminActions = {
     state.raceNo = 1;
     state.history = [];
     state.settings.open = false;
+    state.settings.oddsReveal = 'auto';
     state.settings.raceName = '第1レース';
     save();
     return {

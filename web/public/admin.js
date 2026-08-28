@@ -42,6 +42,9 @@ function boot() {
   $('btnClose').onclick   = function () {
     if (confirm('受付を締め切ります。この時点のオッズで確定してよいですか？')) post('open', { open: false });
   };
+  $('btnOddsShow').onclick = function () { post('oddsReveal', { mode: 'show' }); };
+  $('btnOddsHide').onclick = function () { post('oddsReveal', { mode: 'hide' }); };
+  $('btnOddsAuto').onclick = function () { post('oddsReveal', { mode: 'auto' }); };
   $('btnResult').onclick  = saveResult;
   $('btnSettings').onclick = saveSettings;
   $('btnHorses').onclick  = saveHorses;
@@ -151,16 +154,62 @@ function refresh() {
  *  描画
  * ============================================================ */
 
+/**
+ * いま参加者にオッズが見えているか。
+ * サーバの oddsHiddenNow() と同じ判定を、運営ページの表示用にもう一度やっています
+ * （★式ではなく表示の話なので、ここでの重複は許容。判定の正は必ずサーバ側）。
+ */
+function oddsHiddenNow() {
+  if (!A) return false;
+  if (A.resultReady) return false;
+  var m = A.settings.oddsReveal;
+  if (m === 'show') return false;
+  if (m === 'hide') return true;
+  return !!A.settings.hideOddsUntilClose && !!A.settings.open;
+}
+
+/** ①進行の「オッズの開示」カードの、いまの状態の1行。 */
+function renderOddsReveal() {
+  var hidden = oddsHiddenNow();
+  var m = A.settings.oddsReveal || 'auto';
+  $('kOdds').textContent = hidden ? '非開示' : '開示中';
+
+  var note;
+  if (A.resultReady) {
+    note = 'いま：開示中（着順が入っているので、指定に関わらず出ています）';
+  } else if (m === 'show') {
+    note = 'いま：開示中（手動で開示にしています。受付を開始すると自動に戻ります）';
+  } else if (m === 'hide') {
+    note = 'いま：非開示（手動で伏せています。締切を押しても出ません）';
+  } else if (hidden) {
+    note = 'いま：非開示（自動：受付中のため。締切を押すと一斉開示されます）';
+  } else {
+    note = A.settings.hideOddsUntilClose
+      ? 'いま：開示中（自動：締切済みのため）'
+      : 'いま：開示中（自動：③設定で「受付中はオッズを隠す」がOFFのため）';
+  }
+  $('oddsNow').textContent = note;
+
+  // いま効いている指定のボタンを目立たせる
+  [['btnOddsShow', 'show'], ['btnOddsHide', 'hide'], ['btnOddsAuto', 'auto']]
+    .forEach(function (pair) {
+      var el = $(pair[0]);
+      if (el) el.classList.toggle('on', m === pair[1]);
+    });
+}
+
 function render() {
   renderStorageWarning();
 
   $('head').innerHTML = esc(A.settings.raceName) + '　' +
     (A.settings.open ? '<span class="badge open">受付中</span>'
                      : '<span class="badge closed">締切</span>') +
+    (oddsHiddenNow() ? ' <span class="badge closed">オッズ非開示</span>' : '') +
     (A.resultReady ? ' <span class="badge pend">着順入力済</span>' : '');
 
   $('kRace').textContent = A.raceNo + ' 走目';
   $('kOpen').textContent = A.settings.open ? '受付中' : '締切';
+  renderOddsReveal();
   $('kBets').textContent = A.betCount + ' 点';
   $('kSum').textContent = fmt(A.totals.sumA) + ' pt';
   $('kT').textContent = fmt(A.totals.T) + ' pt';

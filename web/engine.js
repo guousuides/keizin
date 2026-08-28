@@ -55,6 +55,9 @@
       trifectaMode:  MODE.SIMPLE,  // 三連系方式
       open:          false,        // 受付中かどうか
       hideOddsUntilClose: true,    // 受付中はオッズを伏せる（買い控え対策）
+      // 運営がその場で上書きする指示。'auto'＝上の設定にまかせる／'show'＝いま開示／'hide'＝いま伏せる。
+      // 受付を開始するたび 'auto' に戻ります（前のレースの指示を持ち越さないため）。
+      oddsReveal:    'auto',
     };
   }
 

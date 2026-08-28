@@ -20,9 +20,10 @@
 
   <div id="msg" class="msg"></div>
 
-  <div class="kpi" style="grid-template-columns:repeat(5,1fr)">
+  <div class="kpi" style="grid-template-columns:repeat(6,1fr)">
     <div><span>レース</span><b id="kRace">—</b></div>
     <div><span>受付</span><b id="kOpen">—</b></div>
+    <div><span>オッズ</span><b id="kOdds">—</b></div>
     <div><span>購入数</span><b id="kBets">—</b></div>
     <div><span>賭け金の総額 ΣA</span><b id="kSum">—</b></div>
     <div><span>払戻に回る額 T</span><b id="kT">—</b></div>
@@ -49,6 +50,31 @@
         <b>締切を押した瞬間のオッズが確定オッズです。</b>
         受付中は誰かが賭けるたびに全員のオッズが動きます（本物のパリミュチュエル方式と同じ）。
         レースが始まる直前に締め切ってください。締切後は参加者側の取消もできなくなります。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>オッズの開示</h2>
+      <div class="grid g3">
+        <button class="go" id="btnOddsShow">👁 いま開示する</button>
+        <button class="sec" id="btnOddsHide">🙈 いま伏せる</button>
+        <button class="sec" id="btnOddsAuto">↩ 自動にまかせる</button>
+      </div>
+      <div id="oddsNow" class="note"></div>
+      <div class="why">
+        ふだんは <b>③設定の「受付中はオッズを隠す」</b> にまかせておけば、
+        受付中は伏せたままで、<b>締切を押した瞬間に一斉開示</b>されます。
+        このボタンは、そのタイミングをその場でずらしたいときに使います。
+        <br>
+        <b>「いま開示する」</b>＝受付中でも倍率を出す。
+        <b>「いま伏せる」</b>＝締切を押しても出さない（スクリーンで溜めてから見せたいとき）。
+        <b>「自動にまかせる」</b>＝③設定どおりに戻す。
+        <br>
+        伏せているあいだは倍率も各馬の投票ptもサーバから送っていないので、
+        参加者が開発者ツールを開いても分かりません。
+        なお <b>着順を3つ入れると、どの指定でも必ず開示されます</b>
+        （払戻ptを出す時点で倍率も分かるため）。
+        <b>受付を開始すると「自動」に戻ります</b>（前のレースの指定を持ち越さないため）。
       </div>
     </div>
 
