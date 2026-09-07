@@ -690,6 +690,7 @@ const adminActions = {
     // 明らかにおかしい値は直してしまう（0除算や逆転を防ぐ）
     if (!(s.oddsFloor >= 1)) s.oddsFloor = 1;
     if (!(s.oddsCap > s.oddsFloor)) s.oddsCap = s.oddsFloor + 1;
+    if (!(s.comboCap > s.oddsFloor)) s.comboCap = s.oddsFloor + 1;
     if (!(s.roundUnit > 0)) s.roundUnit = 1;
     if (!(s.takeout >= 0) || s.takeout >= 1) s.takeout = 0;
     if (!(s.placeCoef > 0)) s.placeCoef = 1 / 3;

@@ -46,7 +46,8 @@
       placeCoef:     1 / 3,        // 複勝係数 a
       takeout:       0,            // 控除率
       oddsFloor:     1.1,          // オッズ下限
-      oddsCap:       999,          // オッズ上限
+      oddsCap:       30,           // オッズ上限（単勝・複勝・各馬の素オッズ）
+      comboCap:      999,          // 三連単・三連複の払戻倍率の上限（別枠）
       trifectaCoef:  1,            // 三連単係数
       trioCoef:      1,            // 三連複係数
       initialPoints: 1000,         // 初期持ち点（1レース目、および新規チーム）
@@ -76,8 +77,13 @@
             'オッズが甘いと感じたらここを上げてください。' },
     { key: 'oddsFloor', label: 'オッズ下限', type: 'number', step: 'any',
       note: 'どんなに人気でも最低これだけの倍率は付けます。JRAでいう元返し防止。' },
-    { key: 'oddsCap', label: 'オッズ上限', type: 'number', step: 'any',
-      note: '誰も賭けていない馬でオッズが無限に飛ぶのを防ぐ天井。' },
+    { key: 'oddsCap', label: 'オッズ上限（単勝・複勝）', type: 'number', step: 'any',
+      note: '各馬のオッズの天井。誰も賭けていない馬でオッズが無限に飛ぶのを防ぎます。' +
+            '三連単・三連複の払戻には効きません（下の「オッズ上限（三連系）」が別に効きます）。' +
+            'ただし三連系は各馬の素オッズの積なので、ここを下げると三連系の配当も連動して下がります。' },
+    { key: 'comboCap', label: 'オッズ上限（三連系）', type: 'number', step: 'any',
+      note: '三連単・三連複の払戻倍率だけに効く天井。単勝の上限が30なら三連系は理屈のうえで最大 30×30×30 まで伸びるので、' +
+            'それが大きすぎると感じたときだけここで抑えてください。' },
     { key: 'trifectaCoef', label: '三連単係数', type: 'number', step: 'any',
       note: '三連単の払戻に最後に掛ける調整倍率。「単純積」方式だと 1 のままで期待払戻が約180%（胴元の持ち出し）になります。' +
             '下の【三連系の注意】を読んでから決めてください。' },
@@ -152,10 +158,20 @@
     return rows;
   }
 
-  /** MEDIAN(下限, 値, 上限) — 値を下限〜上限に押し込む。 */
-  function clamp(v, s) {
-    if (!isFinite(v)) return s.oddsCap;
-    return Math.min(s.oddsCap, Math.max(s.oddsFloor, v));
+  /**
+   * MEDIAN(下限, 値, 上限) — 値を下限〜上限に押し込む。
+   * cap を省くと単勝・複勝の上限（oddsCap）。三連系は comboCap を渡します。
+   */
+  function clamp(v, s, cap) {
+    var top = (cap === undefined) ? s.oddsCap : cap;
+    if (!isFinite(v)) return top;
+    return Math.min(top, Math.max(s.oddsFloor, v));
+  }
+
+  /** 三連系の上限。古い保存データに comboCap が無いときは従来どおり999。 */
+  function comboCap(s) {
+    var c = Number(s.comboCap);
+    return isFinite(c) && c > 0 ? c : 999;
   }
 
   /**
@@ -243,12 +259,12 @@
 
     if (ticket === '三連単') {
       var v = harville ? fairOdds(exactOrderProb(h[0].p, h[1].p, h[2].p), s) : prod;
-      return clamp(s.trifectaCoef * v, s);
+      return clamp(s.trifectaCoef * v, s, comboCap(s));
     }
 
     // 三連複：3頭が順不同で1〜3着を占める確率の逆数（単純積なら ÷6）
     var w = harville ? fairOdds(trioProb(h[0].p, h[1].p, h[2].p), s) : prod / 6;
-    return clamp(s.trioCoef * w, s);
+    return clamp(s.trioCoef * w, s, comboCap(s));
   }
 
   /**
@@ -276,7 +292,7 @@
 
   /** 的中確率から公正オッズへ。控除率のぶんだけ削ってから逆数を取る。 */
   function fairOdds(prob, s) {
-    if (!(prob > 1e-12)) return s.oddsCap;
+    if (!(prob > 1e-12)) return comboCap(s);   // fairOdds は三連系専用
     return (1 - s.takeout) / prob;
   }
 
